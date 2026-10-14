@@ -1,0 +1,36 @@
+# The canon's § B handler as a reusable workflow: the only thing that moves Linear states automatically.
+# Each repo calls it from a ~10-line caller on pull_request_target (caller/linear-handler.yml). It checks out
+# THIS repo (the handler's own code), never the PR's, and reads the PR body only as data.
+name: linear-handler
+on:
+  workflow_call:
+    inputs:
+      handler-ref:
+        description: the ref of the handler's code to run
+        type: string
+        default: main
+    secrets:
+      LINEAR_CLIENT_ID:
+        required: true
+      LINEAR_CLIENT_SECRET:
+        required: true
+permissions:
+  contents: read
+jobs:
+  linear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: postmark-town/starforge-handler
+          ref: ${{ inputs.handler-ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: done line and Linear state
+        env:
+          LINEAR_CLIENT_ID: ${{ secrets.LINEAR_CLIENT_ID }}
+          LINEAR_CLIENT_SECRET: ${{ secrets.LINEAR_CLIENT_SECRET }}
+        run: node handler.mjs "$GITHUB_EVENT_PATH"

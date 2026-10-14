@@ -1,0 +1,17 @@
+# Linear states move only through the canon's handler (postmark-town/starforge-handler). pull_request_target so a
+# fork's PR is seen too; the handler never runs PR code, and acts only for our own authors.
+name: linear-handler
+on:
+  pull_request_target:
+    types: [opened, ready_for_review, edited, closed]
+concurrency:
+  group: linear-handler-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  linear:
+    uses: postmark-town/starforge-handler/.github/workflows/linear-handler.yml@main
+    secrets:
+      LINEAR_CLIENT_ID: ${{ secrets.LINEAR_HANDLER_CLIENT_ID }}
+      LINEAR_CLIENT_SECRET: ${{ secrets.LINEAR_HANDLER_CLIENT_SECRET }}
