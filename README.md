@@ -44,3 +44,12 @@ which is the PR author's to fix and never an alarm.
 - A state the handler doesn't know is never moved out of.
 - A merge into office, site or town `main` is a hotfix: a note, and Hotfixed is set at its tag by hand. The exception
   is a site PR that touches only the live-on-merge paths (SHIPPING § 4), which is Shipped at merge.
+
+## Known behaviours
+- **A merge through GitHub's merge queue** is merged by `github-merge-queue[bot]`, which is not one of ours, so Linear
+  is untouched and the state is set by hand. None of our repos uses a merge queue today. If one starts to, add the
+  queue's bot to `AUTHORS` deliberately.
+- **A part merge** (`part N of M`, N < M) moves Queued or In Review back to Building. It never moves Backlog or Ready,
+  which no lane had started.
+- **An HTML comment is never a done line.** The PR template's examples live in one, so only the visible line counts.
+- **A renamed file counts under both its names,** so code moved into a site live-on-merge path still reads as a hotfix.

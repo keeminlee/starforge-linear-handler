@@ -2,7 +2,7 @@
 // Run: node --test handler-core.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, doneLine, branchKey, routeOf, rungOf } from './handler-core.mjs';
+import { decide, doneLine, branchKey, pathsOf, routeOf, rungOf } from './handler-core.mjs';
 
 const pr = (o = {}) => ({ repo: 'postmark-town/postmark-office', number: 51, base: 'train/2026-w43', draft: false, merged: false, author: 'bevel-starforge[bot]', mergedBy: 'wright-starforge', files: null, headRef: 'wld-51-fix', body: 'Fixes the thing.\n\ncloses WLD-51\n', ...o });
 const issue = (state, key = 'WLD-51') => ({ key, state });
@@ -179,4 +179,21 @@ test('#6: a site PR into main whose files could not be read: a note, no move', (
 test('#7: the red-zone note is the same words for every event of one PR', () => {
   const notes = [['opened', { draft: true }], ['ready_for_review', {}], ['closed', { merged: true }]].map(([e, p]) => run(e, p, issue('Gated')).note);
   assert.equal(new Set(notes).size, 1);
+});
+
+// ── review-handler leftovers (10-14) ──
+test('#1: a rename counts under both names: code moved into tools/ is not live-only', () => {
+  const files = pathsOf([{ filename: 'tools/Card.astro', previous_filename: 'src/components/Card.astro', status: 'renamed' }]);
+  assert.deepEqual(files, ['tools/Card.astro', 'src/components/Card.astro']);
+  const r = run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main', files }, issue('In Review'));
+  assert.equal(r.move, null); assert.match(r.note, /as a hotfix/);
+});
+test('#3: a part merge moves Queued or In Review to Building, never Backlog or Ready', () => {
+  for (const [s, to] of [['Queued', 'Building'], ['In Review', 'Building'], ['Building', null], ['Backlog', null], ['Ready', null]]) {
+    assert.equal(run('closed', { merged: true, body: 'part 1 of 2 · WLD-51' }, issue(s)).move, to, s);
+  }
+});
+test('#4: a done line inside an HTML comment is not a done line', () => {
+  assert.equal(doneLine('<!-- closes WLD-51 -->').error, 'no done line');
+  assert.equal(doneLine('<!--\ncloses WLD-51\n-->\nunsure · WLD-51').kind, 'unsure');
 });

@@ -13,7 +13,7 @@
 // "linear" step fails, which is what the sentinel's probe reads; review-handler #3).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { decide, issueKeyOf, rungOf } from './handler-core.mjs';
+import { decide, issueKeyOf, pathsOf, rungOf } from './handler-core.mjs';
 
 const CONFIG = JSON.parse(readFileSync(new URL('./handler-config.json', import.meta.url), 'utf8'));
 
@@ -117,7 +117,7 @@ async function prFiles(repo, number) {
     const r = await fetch(`${api}/repos/${repo}/pulls/${number}/files?per_page=100&page=${page}`, { headers, signal: AbortSignal.timeout(30_000) });
     if (!r.ok) throw new Error(`GitHub files: HTTP ${r.status}`);
     const batch = await r.json();
-    out.push(...batch.map((f) => f.filename));
+    out.push(...pathsOf(batch));
     if (batch.length < 100) return out;
   }
   return null; // more than 3,000 files: unknown, so a hand decides

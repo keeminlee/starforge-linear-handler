@@ -25,7 +25,9 @@ const LINES = [
 /** The done line of a PR body: { kind, key, n?, m? }, or { error } when there is none or more than one. */
 export function doneLine(body) {
   const found = [];
-  for (const raw of String(body ?? '').split(/\r?\n/)) {
+  // an HTML comment is the template's explanation, never a done line (review-handler leftover #4)
+  const visible = String(body ?? '').replace(/<!--[\s\S]*?-->/g, '');
+  for (const raw of visible.split(/\r?\n/)) {
     const line = raw.replace(/^\s*(?:[-*>]\s+)?/, '').replace(/`/g, '');
     for (const { kind, re } of LINES) {
       const m = re.exec(line);
@@ -55,6 +57,12 @@ export function branchKey(ref) {
 // world-spire (a private fork) has no route: a hand sets it.
 const TRAIN_REPOS = new Set(['postmark-office', 'postmark-site', 'postmark']);
 const LIVE_ON_MERGE = new Set(['postmark-blueprints', 'postmark-telemetry']);
+/** A PR's changed paths from GitHub's files API: a renamed file counts under both its names, so moving code into a
+ *  live-on-merge path is not read as live-only (review-handler leftover #1). */
+export function pathsOf(apiFiles) {
+  return apiFiles.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean));
+}
+
 /** postmark-site's paths that go live on merge to main, no tag (SHIPPING § 4). */
 export const SITE_LIVE_PATHS = ['tools/', 'public/atelier/postmark/', 'src/data/postmark/', 'public/renditions/'];
 
@@ -144,7 +152,9 @@ export function decide({ event, pr, issue }) {
   // a merge: the done line decides; a missing one is an unsure (the handler never guesses "done")
   const kind = d.error ? 'unsure' : d.kind === 'part' && d.n === d.m ? 'closes' : d.kind;
   if (kind === 'part') {
-    return { move: issue.state === 'In Review' || forward(issue.state, 'Building') ? 'Building' : null, note: null, ladder: null, check };
+    // more PRs coming: the issue is (back) in Building, but only from a lane's states (leftover #3: never from
+    // Backlog or Ready, which no lane had started)
+    return { move: issue.state === 'Queued' || issue.state === 'In Review' ? 'Building' : null, note: null, ladder: null, check };
   }
   if (kind === 'unsure') {
     return { move: null, ladder: rungOf(pr.author), check, note: `Unsure (${label(pr)} merged): does it finish ${key}? ${d.error ? `The PR had ${d.error}. ` : ''}Asking up the ladder; the state holds until someone is sure.` };
