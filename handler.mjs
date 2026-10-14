@@ -5,7 +5,8 @@
 //   node handler.mjs <event.json>            act on Linear (the handler's own Linear app, client credentials)
 //   HANDLER_DRY=1 node handler.mjs <event>   say what it would do, change nothing
 //
-// Env: LINEAR_CLIENT_ID + LINEAR_CLIENT_SECRET (the org secret; never printed). GITHUB_STEP_SUMMARY when present.
+// Env: LINEAR_APP, the handler's Linear app as two lines, client id then secret (postmark-town's org secret
+// LINEAR_HANDLER_APP, passed in by each caller; never printed). GITHUB_STEP_SUMMARY when present.
 // Exit: 0 done (or nothing to do), 1 the PR's done line check failed (a ready PR without one), 2 a failure to act.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -57,10 +58,11 @@ export async function handle(ev, linear, { dry = false, log = () => {} } = {}) {
 // ── the real Linear client (the handler's own app, client credentials) ──
 
 async function linearClient(env) {
-  if (!env.LINEAR_CLIENT_ID || !env.LINEAR_CLIENT_SECRET) throw new Error('no Linear app credentials (LINEAR_CLIENT_ID / LINEAR_CLIENT_SECRET)');
+  const [clientId, clientSecret] = String(env.LINEAR_APP ?? '').split(/\r?\n/).map((s) => s.trim());
+  if (!clientId || !clientSecret) throw new Error('no Linear app credentials (LINEAR_APP: two lines, client id then secret)');
   const t = await fetch('https://api.linear.app/oauth/token', {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: env.LINEAR_CLIENT_ID, client_secret: env.LINEAR_CLIENT_SECRET, scope: 'read,write' }),
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret, scope: 'read,write' }),
   });
   if (!t.ok) throw new Error(`Linear token: HTTP ${t.status}`);
   const token = (await t.json()).access_token;
@@ -99,7 +101,7 @@ if (isMain) {
     const log = (s) => { lines.push(s); console.log(s); };
     let r;
     try {
-      const linear = dry && !process.env.LINEAR_CLIENT_ID ? stubFromNothing() : await linearClient(process.env);
+      const linear = dry && !process.env.LINEAR_APP ? stubFromNothing() : await linearClient(process.env);
       r = await handle(ev, linear, { dry, log });
     } catch (e) { console.error(`handler: ${e.message}`); return 2; }
     console.log(r.check.summary);

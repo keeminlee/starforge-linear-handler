@@ -1,4 +1,8 @@
 {
-  "_doc": "Linear user ids an unsure is delegated to, by rung (rule 6: the delegate is whose court it is). Filled when the handler's Linear app exists; a missing id makes the handler say 'delegate by hand' instead of guessing.",
-  "delegates": { "rivet": null, "bevel": null, "wright": null }
+  "_doc": "Linear user ids an unsure is delegated to, by rung (rule 6: the delegate is whose court it is): each seat's own Linear app user, and Wright's. A missing id makes the handler say 'delegate by hand' instead of guessing.",
+  "delegates": {
+    "rivet": "f18a6e81-4760-4678-b9a3-de439737e2f0",
+    "bevel": "71ffbdfa-48c0-47c4-90d1-e13c77eceb69",
+    "wright": "fadf18ad-dd89-407a-a73a-3864bae90545"
+  }
 }

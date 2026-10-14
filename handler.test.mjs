@@ -51,11 +51,21 @@ test('merged into train, closes → On the Train', async () => {
   await handle(event('closed', { merged: true }), L);
   assert.deepEqual(L.calls, [['state', 'id-WLD-51', 's-On the Train']]);
 });
-test('unsure at merge: no state write, one note, and the delegate only when a Linear user is configured', async () => {
+test('unsure at merge: no state write, one note, and the delegate to the lane’s lead (Bevel’s Linear app user)', async () => {
   const L = stubLinear({ 'WLD-51': { state: 'In Review' } });
   const r = await handle(event('closed', { merged: true, body: 'unsure · WLD-51' }), L);
+  assert.deepEqual(L.calls, [['comment', 'id-WLD-51', r.note], ['delegate', 'id-WLD-51', '71ffbdfa-48c0-47c4-90d1-e13c77eceb69']]);
+});
+test('unsure at merge, already delegated to that lead: the note only', async () => {
+  const L = stubLinear({ 'WLD-51': { state: 'In Review', delegateId: '71ffbdfa-48c0-47c4-90d1-e13c77eceb69' } });
+  const r = await handle(event('closed', { merged: true, body: 'unsure · WLD-51' }), L);
   assert.deepEqual(L.calls.map((c) => c[0]), ['comment']);
-  assert.match(r.did.at(-1), /no Linear user is configured for it; delegate by hand/);
+  assert.match(r.did.at(-1), /already delegated to bevel/);
+});
+test('an in-session lane’s unsure goes to Wright’s Linear user', async () => {
+  const L = stubLinear({ 'WLD-51': { state: 'In Review' } });
+  await handle(event('closed', { merged: true, body: 'unsure · WLD-51', author: 'wright-starforge' }), L);
+  assert.deepEqual(L.calls.at(-1), ['delegate', 'id-WLD-51', 'fadf18ad-dd89-407a-a73a-3864bae90545']);
 });
 test('a stranger citing our issue: Linear is not even read', async () => {
   let reads = 0;

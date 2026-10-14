@@ -6,13 +6,12 @@ on:
   workflow_call:
     inputs:
       handler-ref:
-        description: the ref of the handler's code to run
+        description: the commit of the handler's code to run, the same SHA the caller pins this workflow at
         type: string
-        default: main
-    secrets:
-      LINEAR_CLIENT_ID:
         required: true
-      LINEAR_CLIENT_SECRET:
+    secrets:
+      LINEAR_APP:
+        description: the handler's Linear app, two lines (client id, then secret)
         required: true
 permissions:
   contents: read
@@ -23,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: postmark-town/starforge-handler
+          repository: keeminlee/starforge-linear-handler
           ref: ${{ inputs.handler-ref }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -31,6 +30,5 @@ jobs:
           node-version: 22
       - name: done line and Linear state
         env:
-          LINEAR_CLIENT_ID: ${{ secrets.LINEAR_CLIENT_ID }}
-          LINEAR_CLIENT_SECRET: ${{ secrets.LINEAR_CLIENT_SECRET }}
+          LINEAR_APP: ${{ secrets.LINEAR_APP }}
         run: node handler.mjs "$GITHUB_EVENT_PATH"

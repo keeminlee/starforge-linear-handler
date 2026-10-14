@@ -1,4 +1,4 @@
-# starforge-handler
+# starforge-linear-handler
 
 The one thing that moves Postmark's Linear issue states automatically (the lifecycle canon, § B, in
 postmark-telemetry `docs/canon/`). Every PR event in postmark-town's repos runs it through a ~10-line caller
@@ -15,5 +15,12 @@ postmark-telemetry `docs/canon/`). Every PR event in postmark-town's repos runs 
   handler never checks out or runs PR code.
 
 `handler-core.mjs` is pure, and every arrow is a test (`node --test`). `handler.mjs` adds GitHub's event and Linear
-(the handler's own Linear app, client credentials from the org secrets `LINEAR_HANDLER_CLIENT_ID` / `_SECRET`).
+(the handler's own Linear app, client credentials from postmark-town's org secret `LINEAR_HANDLER_APP`, two lines,
+passed into the reusable workflow as `LINEAR_APP`). A caller pins this repo by commit: replace both `HANDLER_SHA`s in
+`caller/linear-handler.yml` with the reviewed commit.
 `HANDLER_DRY=1 node handler.mjs <event.json>` says what it would do and changes nothing.
+
+The handler's Linear app user is **handler meepling** (`134f09b4-b96c-4156-8f12-2c33a5d1ab48`), so its moves and notes read
+as the handler's, never a hand's. Every run mints with the same scopes (`read,write`): Linear returns the live token for
+the same scope set, and a mint with a different set would revoke the app's other tokens, so keep them the same.
+`handler-config.json` holds the Linear user ids an Unsure is delegated to (the seats' own app users, and Wright's).
