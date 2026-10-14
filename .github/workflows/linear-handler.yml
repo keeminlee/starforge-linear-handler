@@ -1,6 +1,11 @@
 # The canon's § B handler as a reusable workflow: the only thing that moves Linear states automatically.
-# Each repo calls it from a ~10-line caller on pull_request_target (caller/linear-handler.yml). It checks out
+# Each repo calls it from a ~15-line caller on pull_request_target (caller/linear-handler.yml). It checks out
 # THIS repo (the handler's own code), never the PR's, and reads the PR body only as data.
+#
+# Two steps, so a failure says which kind it is:
+#   linear     acts on Linear (or, dry, says what it would do). It fails only when the handler could not act: that
+#              is what the sentinel's probe reads as an alarm.
+#   done line  fails when the PR's done line needs fixing: the PR author's to fix, never an alarm.
 name: linear-handler
 on:
   workflow_call:
@@ -9,12 +14,17 @@ on:
         description: the commit of the handler's code to run, the same SHA the caller pins this workflow at
         type: string
         required: true
+      live:
+        description: true acts on Linear; false (the default) only says what it would do. One org variable flips it.
+        type: boolean
+        default: false
     secrets:
       LINEAR_APP:
         description: the handler's Linear app, two lines (client id, then secret)
         required: true
 permissions:
   contents: read
+  pull-requests: read
 jobs:
   linear:
     runs-on: ubuntu-latest
@@ -28,7 +38,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-      - name: done line and Linear state
+      - name: linear
+        id: linear
         env:
           LINEAR_APP: ${{ secrets.LINEAR_APP }}
+          HANDLER_DRY: ${{ inputs.live && '0' || '1' }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: node handler.mjs "$GITHUB_EVENT_PATH"
+      - name: done line
+        if: steps.linear.outputs.check_ok == 'false'
+        env:
+          SUMMARY: ${{ steps.linear.outputs.check_summary }}
+        run: |
+          echo "$SUMMARY"
+          exit 1

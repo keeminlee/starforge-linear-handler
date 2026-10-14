@@ -4,7 +4,8 @@
 //
 //   decide({ event, pr, issue }) -> { move, note, ladder, check }   (pr.author is the PR's GitHub login)
 //     move    the state to set, or null
-//     note    one comment for the issue, or null (only for a red-zone refusal, an unsure, or a route nobody ruled)
+//     note    one comment for the issue, or null (a red-zone refusal, a key mismatch, an unsure, a hotfix, or a
+//             merge that could not be routed); one per PR, never per event
 //     ladder  the rung an unsure goes to first (the lane's lead, or wright for an in-session lane), else null;
 //             the caller delegates the issue to it, and the house's doorbell rings the new holder (rule 6)
 //     check   { ok, summary } for the PR's own check run: a ready PR without a done line fails it
@@ -47,11 +48,15 @@ export function branchKey(ref) {
   return m ? m[1].toUpperCase() : null;
 }
 
-// The ship routes (Wright, 10-14 18:24, from SHIPPING): office, site and town ride the weekly train, and a PR into
-// their main is a hotfix (Hotfixed at its tag); world ships at a blessed settlement; the docs and ops repos are live
-// on merge. world-spire (a private fork) has no route: a hand sets it.
+// The ship routes (Wright 10-14 18:24 and his review ruling, from TRACKING and SHIPPING § 4–5): office, site and town
+// ride the weekly train; world ships at a blessed settlement; the docs and ops repos are live on merge. A merge into
+// an office, site or town main is a hotfix: Hotfixed is set at its tag by whoever cuts it, never at merge, so the state
+// holds with a note. A site PR into main touching only the live-on-merge paths is live on merge: Shipped.
+// world-spire (a private fork) has no route: a hand sets it.
 const TRAIN_REPOS = new Set(['postmark-office', 'postmark-site', 'postmark']);
 const LIVE_ON_MERGE = new Set(['postmark-blueprints', 'postmark-telemetry']);
+/** postmark-site's paths that go live on merge to main, no tag (SHIPPING § 4). */
+export const SITE_LIVE_PATHS = ['tools/', 'public/atelier/postmark/', 'src/data/postmark/', 'public/renditions/'];
 
 /** The issue a PR is about: its done line's, else its branch's; null when neither names one of ours. */
 export function issueKeyOf(pr) {
@@ -59,19 +64,29 @@ export function issueKeyOf(pr) {
   return d.error ? branchKey(pr.headRef) : d.key;
 }
 
-/** The state a merge that finishes its issue goes to, by repo and base (canon § B "repo and base"); null when no route is ruled. */
-export function routeOf(repo, base) {
+/**
+ * Where a merge that finishes its issue goes, by repo, base and (for a site PR into main) its changed files:
+ * { to } a state, or { to: null, why } with why one of 'hotfix', 'files-unread', 'unrouted'.
+ * files is the PR's changed paths, or null when they could not be read.
+ */
+export function routeOf(repo, base, files = null) {
   const name = String(repo).replace(/^postmark-town\//, '');
-  const train = /^train\//.test(base), main = base === 'main' || base === 'master';
-  if (TRAIN_REPOS.has(name) && train) return 'On the Train';
-  if (TRAIN_REPOS.has(name) && main) return 'Hotfixed';
-  if (name === 'postmark-world' && main) return 'Awaiting Settlement';
-  if (LIVE_ON_MERGE.has(name) && main) return 'Shipped';
-  return null;
+  const train = /^train\//.test(String(base)), main = base === 'main' || base === 'master';
+  if (TRAIN_REPOS.has(name) && train) return { to: 'On the Train' };
+  if (name === 'postmark-site' && main) {
+    if (!Array.isArray(files)) return { to: null, why: 'files-unread' };
+    if (files.length && files.every((f) => SITE_LIVE_PATHS.some((p) => String(f).startsWith(p)))) return { to: 'Shipped' };
+    return { to: null, why: 'hotfix' };
+  }
+  if (TRAIN_REPOS.has(name) && main) return { to: null, why: 'hotfix' };
+  if (name === 'postmark-world' && main) return { to: 'Awaiting Settlement' };
+  if (LIVE_ON_MERGE.has(name) && main) return { to: 'Shipped' };
+  return { to: null, why: 'unrouted' };
 }
 
 // Our authors, and whose court a lane of theirs is in (Wright, 10-14 18:24: the pod Apps' bots, wright-starforge
-// and keeminlee; in-session Plumb pushes as wright-starforge). Anyone else's PR never touches Linear, not even a note.
+// and keeminlee; in-session Plumb pushes as wright-starforge). Anyone else's PR never touches Linear, not even a note,
+// and a merge counts only when one of them merged it (review-handler #2).
 export const AUTHORS = { 'rivet-starforge[bot]': 'rivet', 'bevel-starforge[bot]': 'bevel', 'wright-starforge': 'wright', keeminlee: 'wright' };
 /** The rung a PR's author answers to, or null for an author who is not ours (gh prints an App as app/<slug>). */
 export function rungOf(login) {
@@ -80,15 +95,23 @@ export function rungOf(login) {
 }
 
 const label = (pr) => `${String(pr.repo).replace(/^postmark-town\//, '')}#${pr.number}`;
-const forward = (from, to) => (RANK[to] ?? -1) > (RANK[from] ?? -1);
+// a state the handler doesn't know (a renamed state, a curly apostrophe) is never moved out of (review-handler #4)
+const forward = (from, to) => Object.hasOwn(RANK, from) && (RANK[to] ?? -1) > RANK[from];
+// a merge's "closes" moves an issue only from the states a lane is in (review-handler #2)
+const LANE_STATES = new Set(['Building', 'In Review']);
 
 export function decide({ event, pr, issue }) {
   const none = (check = { ok: true, summary: 'nothing for Linear' }) => ({ move: null, note: null, ladder: null, check });
   const d = doneLine(pr.body);
+  const bk = branchKey(pr.headRef);
+  // the done line and the branch must name the same issue (house rule 7 names the branch with it; review-handler #2)
+  const mismatch = !d.error && bk && bk !== d.key ? `the done line names ${d.key} but the branch names ${bk}` : null;
   const isReadyEvent = (event === 'opened' && !pr.draft) || event === 'ready_for_review' || (event === 'edited' && !pr.draft);
-  const check = d.error
-    ? (isReadyEvent ? { ok: false, summary: `done line: ${d.error}. Add one line: "closes WLD-51", "part 1 of 2 · WLD-51" or "unsure · WLD-51"` } : { ok: true, summary: `done line: ${d.error} (needed when the PR is ready)` })
-    : { ok: true, summary: `done line: ${d.kind === 'part' ? `part ${d.n} of ${d.m}` : d.kind} · ${d.key}` };
+  const check = mismatch
+    ? { ok: false, summary: `done line: ${mismatch}; fix one of them` }
+    : d.error
+      ? (isReadyEvent ? { ok: false, summary: `done line: ${d.error}. Add one line: "closes WLD-51", "part 1 of 2 · WLD-51" or "unsure · WLD-51"` } : { ok: true, summary: `done line: ${d.error} (needed when the PR is ready)` })
+      : { ok: true, summary: `done line: ${d.kind === 'part' ? `part ${d.n} of ${d.m}` : d.kind} · ${d.key}` };
 
   if (!rungOf(pr.author)) return none({ ok: true, summary: 'not one of our authors; Linear untouched' });
   const key = issueKeyOf(pr);
@@ -96,11 +119,16 @@ export function decide({ event, pr, issue }) {
   if (!issue || issue.key !== key) return none({ ...check, summary: `${check.summary}; ${key} not found on Linear` });
 
   const merged = event === 'closed' && pr.merged;
+  if (merged && !rungOf(pr.mergedBy)) return none({ ...check, summary: `${check.summary}; merged by someone not ours, so Linear is untouched` });
   const acts = event === 'opened' || event === 'ready_for_review' || event === 'converted_to_draft' || merged;
   if (!acts) return none(check);
 
+  // one note per PR, whatever the event (review-handler #7): its words never depend on which event this is
   if (RED_ZONE.has(issue.state)) {
-    return { move: null, ladder: null, check, note: `${label(pr)} ${merged ? 'merged' : event === 'opened' ? 'opened' : event === 'converted_to_draft' ? 'went back to draft' : 'is ready'}; ${key} stays in ${issue.state} (red zone: only a hand moves it out).` };
+    return { move: null, ladder: null, check, note: `${label(pr)} names ${key}; it stays in ${issue.state} (red zone: only a hand moves it out).` };
+  }
+  if (mismatch) {
+    return { move: null, ladder: null, check, note: `${label(pr)}: ${mismatch}, so nothing moved; fix one of them.` };
   }
 
   // the lead's FIX (canon rule 7): its worker turns the PR back to draft, and the issue goes back to Building; the one
@@ -121,7 +149,15 @@ export function decide({ event, pr, issue }) {
   if (kind === 'unsure') {
     return { move: null, ladder: rungOf(pr.author), check, note: `Unsure (${label(pr)} merged): does it finish ${key}? ${d.error ? `The PR had ${d.error}. ` : ''}Asking up the ladder; the state holds until someone is sure.` };
   }
-  const to = routeOf(pr.repo, pr.base);
-  if (!to) return { move: null, ladder: null, check, note: `${label(pr)} merged into ${pr.base} and closes ${key}, but no route is ruled for that repo and base; set the state by hand.` };
-  return { move: forward(issue.state, to) ? to : null, note: null, ladder: null, check };
+  if (!LANE_STATES.has(issue.state)) {
+    return { move: null, ladder: null, check, note: `${label(pr)} merged and closes ${key}, but ${key} is in ${issue.state}, not Building or In Review, so the merge moved nothing; set it by hand.` };
+  }
+  const r = routeOf(pr.repo, pr.base, pr.files ?? null);
+  if (r.to) return { move: forward(issue.state, r.to) ? r.to : null, note: null, ladder: null, check };
+  const why = {
+    hotfix: `${label(pr)} merged to ${pr.base} as a hotfix and closes ${key}; Hotfixed is set at its tag by whoever cuts it (SHIPPING § 5). The state holds.`,
+    'files-unread': `${label(pr)} merged to ${pr.base} and closes ${key}, but its changed files could not be read, so whether it is live on merge is unknown; set the state by hand.`,
+    unrouted: `${label(pr)} merged into ${pr.base} and closes ${key}, but no route is ruled for that repo and base; set the state by hand.`,
+  }[r.why];
+  return { move: null, ladder: null, check, note: why };
 }

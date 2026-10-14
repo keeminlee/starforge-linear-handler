@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decide, doneLine, branchKey, routeOf, rungOf } from './handler-core.mjs';
 
-const pr = (o = {}) => ({ repo: 'postmark-town/postmark-office', number: 51, base: 'train/2026-w43', draft: false, merged: false, author: 'bevel-starforge[bot]', headRef: 'wld-51-fix', body: 'Fixes the thing.\n\ncloses WLD-51\n', ...o });
+const pr = (o = {}) => ({ repo: 'postmark-town/postmark-office', number: 51, base: 'train/2026-w43', draft: false, merged: false, author: 'bevel-starforge[bot]', mergedBy: 'wright-starforge', files: null, headRef: 'wld-51-fix', body: 'Fixes the thing.\n\ncloses WLD-51\n', ...o });
 const issue = (state, key = 'WLD-51') => ({ key, state });
 const run = (event, p, i) => decide({ event, pr: pr(p), issue: i });
 
@@ -92,9 +92,12 @@ test('B: a draft without a done line passes (it is needed when ready)', () => as
 test('B: merged, closes, office → train → On the Train', () => assert.equal(run('closed', { merged: true }, issue('In Review')).move, 'On the Train'));
 test('B: merged, closes, site → train → On the Train', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-site' }, issue('In Review')).move, 'On the Train'));
 test('B: merged, closes, world → main → Awaiting Settlement', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-world', base: 'main' }, issue('In Review')).move, 'Awaiting Settlement'));
-test('B: merged, closes, office → main → Hotfixed', () => assert.equal(run('closed', { merged: true, base: 'main' }, issue('In Review')).move, 'Hotfixed'));
+test('B: merged, closes, office → main → a hotfix: no move; Hotfixed is set at its tag (Wright\'s ruling)', () => {
+  const r = run('closed', { merged: true, base: 'main' }, issue('In Review'));
+  assert.equal(r.move, null); assert.match(r.note, /as a hotfix .* Hotfixed is set at its tag/);
+});
 test('B: merged, closes, town → train → On the Train', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark' }, issue('In Review')).move, 'On the Train'));
-test('B: merged, closes, town → main → Hotfixed', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark', base: 'main' }, issue('In Review')).move, 'Hotfixed'));
+test('B: merged, closes, town → main → a hotfix note, no move', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark', base: 'main' }, issue('In Review')).move, null));
 test('B: merged, closes, blueprints or telemetry → main → Shipped (live on merge)', () => {
   for (const repo of ['postmark-town/postmark-blueprints', 'postmark-town/postmark-telemetry']) assert.equal(run('closed', { merged: true, repo, base: 'main' }, issue('In Review')).move, 'Shipped');
 });
@@ -120,10 +123,11 @@ test('B: merged without a done line → an unsure (never a guessed done)', () =>
 
 // ── routes ──
 test('routes: only the ruled ones', () => {
-  assert.equal(routeOf('postmark-town/postmark-office', 'train/2026-w43'), 'On the Train');
-  assert.equal(routeOf('postmark-world', 'train/x'), null);
-  assert.equal(routeOf('postmark-town/postmark-telemetry', 'train/x'), null);
-  assert.equal(routeOf('postmark-town/postmark-office', 'wld-51-fix'), null);
+  assert.deepEqual(routeOf('postmark-town/postmark-office', 'train/2026-w43'), { to: 'On the Train' });
+  assert.deepEqual(routeOf('postmark-world', 'train/x'), { to: null, why: 'unrouted' });
+  assert.deepEqual(routeOf('postmark-town/postmark-telemetry', 'train/x'), { to: null, why: 'unrouted' });
+  assert.deepEqual(routeOf('postmark-town/postmark-office', 'wld-51-fix'), { to: null, why: 'unrouted' });
+  assert.deepEqual(routeOf('postmark-town/postmark-office', 'main'), { to: null, why: 'hotfix' });
 });
 
 // ── the ladder's first rung, by author ──
@@ -136,4 +140,43 @@ test('rungs: a pod App is its lead; Wright for in-session and Keemin; a meep app
 });
 test('B: an in-session lane’s unsure goes to Wright', () => {
   assert.equal(run('closed', { merged: true, body: 'unsure · WLD-51', author: 'wright-starforge' }, issue('In Review')).ladder, 'wright');
+});
+
+// ── review-handler (10-14) ──
+test('#2: a merge whose done line names another issue than its branch moves nothing, notes it, and fails the check', () => {
+  const r = run('closed', { merged: true, headRef: 'wld-51-fix', body: 'closes POS-9' }, issue('In Review', 'POS-9'));
+  assert.equal(r.move, null); assert.match(r.note, /names POS-9 but the branch names WLD-51/); assert.equal(r.check.ok, false);
+});
+test('#2: a mismatch on a ready PR moves nothing either', () => {
+  assert.equal(run('ready_for_review', { headRef: 'wld-51-fix', body: 'closes WLD-9' }, issue('Building', 'WLD-9')).move, null);
+});
+test('#2: closes moves only from Building or In Review: a Backlog issue gets a note, not Shipped', () => {
+  const r = run('closed', { merged: true, repo: 'postmark-town/postmark-telemetry', base: 'main' }, issue('Backlog'));
+  assert.equal(r.move, null); assert.match(r.note, /is in Backlog, not Building or In Review/);
+});
+test('#2: a merge by someone not ours moves nothing and notes nothing', () => {
+  const r = run('closed', { merged: true, mergedBy: 'a-stranger' }, issue('In Review'));
+  assert.equal(r.move, null); assert.equal(r.note, null);
+});
+test('#2: a merge by keeminlee or a pod App counts', () => {
+  assert.equal(run('closed', { merged: true, mergedBy: 'keeminlee' }, issue('In Review')).move, 'On the Train');
+});
+test('#4: a state the handler does not know is never moved out of (a curly apostrophe)', () => {
+  assert.equal(run('closed', { merged: true }, issue('Darko’s Call')).move, null);
+  assert.equal(run('ready_for_review', {}, issue('Some New State')).move, null);
+});
+test('#6: a site PR into main touching only live-on-merge paths is Shipped at merge', () => {
+  assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main', files: ['tools/fetch-town.mjs', 'src/data/postmark/x.json'] }, issue('In Review')).move, 'Shipped');
+});
+test('#6: a site PR into main touching code is a hotfix: a note, no move', () => {
+  const r = run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main', files: ['tools/a.mjs', 'src/lib/b.ts'] }, issue('In Review'));
+  assert.equal(r.move, null); assert.match(r.note, /as a hotfix/);
+});
+test('#6: a site PR into main whose files could not be read: a note, no move', () => {
+  const r = run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main', files: null }, issue('In Review'));
+  assert.equal(r.move, null); assert.match(r.note, /could not be read/);
+});
+test('#7: the red-zone note is the same words for every event of one PR', () => {
+  const notes = [['opened', { draft: true }], ['ready_for_review', {}], ['closed', { merged: true }]].map(([e, p]) => run(e, p, issue('Gated')).note);
+  assert.equal(new Set(notes).size, 1);
 });

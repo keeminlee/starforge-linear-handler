@@ -24,3 +24,23 @@ The handler's Linear app user is **handler meepling** (`134f09b4-b96c-4156-8f12-
 as the handler's, never a hand's. Every run mints with the same scopes (`read,write`): Linear returns the live token for
 the same scope set, and a mint with a different set would revoke the app's other tokens, so keep them the same.
 `handler-config.json` holds the Linear user ids an Unsure is delegated to (the seats' own app users, and Wright's).
+
+## Dry until the cutover, then one variable
+Every caller passes `live: ${{ vars.LINEAR_HANDLER_LIVE == '1' }}`. With postmark-town's org variable unset, the handler
+runs **dry**: it reads Linear and writes what it would do in the job summary, and it moves nothing. The cutover happens
+in one sitting: Wright turns off Linear's four git automations, and sets `LINEAR_HANDLER_LIVE=1`. Rolling back means
+unsetting it. Before it goes live, a dry repeat of a red-zone event must say "note already there" once a live note
+exists.
+
+## What fails, and what that means
+The job has two steps. **`linear`** fails only when the handler could not act: Linear down, a bad secret, an unknown
+state. That is the alarm, and the job summary says why. **`done line`** fails when the PR's done line needs fixing,
+which is the PR author's to fix and never an alarm.
+
+## The rules a merge must pass (review-handler, 10-14)
+- The done line and the branch name the same issue.
+- `closes` moves an issue only from Building or In Review.
+- Our author opened the PR and one of ours merged it.
+- A state the handler doesn't know is never moved out of.
+- A merge into office, site or town `main` is a hotfix: a note, and Hotfixed is set at its tag by hand. The exception
+  is a site PR that touches only the live-on-merge paths (SHIPPING § 4), which is Shipped at merge.
