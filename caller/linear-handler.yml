@@ -3,7 +3,7 @@
 name: linear-handler
 on:
   pull_request_target:
-    types: [opened, ready_for_review, edited, closed]
+    types: [opened, ready_for_review, converted_to_draft, edited, closed]
 concurrency:
   group: linear-handler-${{ github.event.pull_request.number }}
   cancel-in-progress: false

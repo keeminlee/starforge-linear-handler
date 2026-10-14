@@ -69,8 +69,16 @@ test('B: opened ready → In Review', () => assert.equal(run('opened', {}, issue
 test('B: marked ready → In Review (rule 7: In Review is the handoff)', () => assert.equal(run('ready_for_review', {}, issue('Building')).move, 'In Review'));
 test('A: never backwards: a new PR on a row already On the Train leaves it', () => assert.equal(run('opened', { draft: true }, issue('On the Train')).move, null));
 test('A: already In Review: no move', () => assert.equal(run('ready_for_review', {}, issue('In Review')).move, null));
-test('B: other events (synchronize, edited, converted to draft, closed unmerged) move nothing', () => {
-  for (const [e, p] of [['synchronize', {}], ['edited', {}], ['converted_to_draft', { draft: true }], ['closed', { merged: false }]]) assert.equal(run(e, p, issue('In Review')).move, null);
+test('B: other events (synchronize, edited, closed unmerged) move nothing', () => {
+  for (const [e, p] of [['synchronize', {}], ['edited', {}], ['closed', { merged: false }]]) assert.equal(run(e, p, issue('In Review')).move, null);
+});
+test('A: a FIX (the PR turned back to draft) → In Review back to Building', () => assert.equal(run('converted_to_draft', { draft: true }, issue('In Review')).move, 'Building'));
+test('A: turned back to draft anywhere but In Review → no move', () => {
+  for (const s of ['Building', 'On the Train', 'Queued']) assert.equal(run('converted_to_draft', { draft: true }, issue(s)).move, null);
+});
+test("B: turned back to draft in the red zone → no move, the red-zone note", () => {
+  const r = run('converted_to_draft', { draft: true }, issue("Darko's Call"));
+  assert.equal(r.move, null); assert.match(r.note, /stays in Darko's Call/);
 });
 
 // ── § B: the check (the done line is required) ──

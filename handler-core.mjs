@@ -96,13 +96,18 @@ export function decide({ event, pr, issue }) {
   if (!issue || issue.key !== key) return none({ ...check, summary: `${check.summary}; ${key} not found on Linear` });
 
   const merged = event === 'closed' && pr.merged;
-  const acts = event === 'opened' || event === 'ready_for_review' || merged;
+  const acts = event === 'opened' || event === 'ready_for_review' || event === 'converted_to_draft' || merged;
   if (!acts) return none(check);
 
   if (RED_ZONE.has(issue.state)) {
-    return { move: null, ladder: null, check, note: `${label(pr)} ${merged ? 'merged' : event === 'opened' ? 'opened' : 'is ready'}; ${key} stays in ${issue.state} (red zone: only a hand moves it out).` };
+    return { move: null, ladder: null, check, note: `${label(pr)} ${merged ? 'merged' : event === 'opened' ? 'opened' : event === 'converted_to_draft' ? 'went back to draft' : 'is ready'}; ${key} stays in ${issue.state} (red zone: only a hand moves it out).` };
   }
 
+  // the lead's FIX (canon rule 7): its worker turns the PR back to draft, and the issue goes back to Building; the one
+  // move backwards the handler makes on its own, and only from In Review
+  if (event === 'converted_to_draft') {
+    return { move: issue.state === 'In Review' ? 'Building' : null, note: null, ladder: null, check };
+  }
   if (!merged) {
     const to = pr.draft ? 'Building' : 'In Review';
     return { move: forward(issue.state, to) ? to : null, note: null, ladder: null, check };
