@@ -22,6 +22,10 @@ test('done line: two different ones are refused', () => assert.match(doneLine('c
 test('done line: the same one twice is one', () => assert.equal(doneLine('closes WLD-51\n\ncloses WLD-51').kind, 'closes'));
 test('done line: an impossible part is refused', () => assert.match(doneLine('part 3 of 2 · WLD-51').error, /not a part/));
 test('done line: another team is not ours', () => assert.equal(doneLine('closes ABC-1').error, 'no done line'));
+test('done line: the PR template left unedited is no done line', async () => {
+  const { readFileSync } = await import('node:fs');
+  assert.equal(doneLine(readFileSync(new URL('./caller/pull_request_template.md', import.meta.url), 'utf8')).error, 'no done line');
+});
 test('branch key (house rule 7)', () => {
   assert.equal(branchKey('wld-9-own-home-in-bare-read'), 'WLD-9');
   assert.equal(branchKey('pos-516'), 'POS-516');
