@@ -51,5 +51,5 @@ which is the PR author's to fix and never an alarm.
   queue's bot to `AUTHORS` deliberately.
 - **A part merge** (`part N of M`, N < M) moves Queued or In Review back to Building. It never moves Backlog or Ready,
   which no lane had started.
-- **An HTML comment is never a done line.** The PR template's examples live in one, so only the visible line counts.
+- **An HTML comment is never a done line:** only a visible line counts.
 - **A renamed file counts under both its names,** so code moved into a site live-on-merge path still reads as a hotfix.

@@ -25,8 +25,9 @@ const LINES = [
 /** The done line of a PR body: { kind, key, n?, m? }, or { error } when there is none or more than one. */
 export function doneLine(body) {
   const found = [];
-  // an HTML comment is the template's explanation, never a done line (review-handler leftover #4)
-  const visible = String(body ?? '').replace(/<!--[\s\S]*?-->/g, '');
+  // an HTML comment is never a done line, only a visible line is (review-handler leftover #4); an unclosed one
+  // runs to the end of the body, as a reader's renderer hides it
+  const visible = String(body ?? '').replace(/<!--[\s\S]*?(?:-->|$)/g, '');
   for (const raw of visible.split(/\r?\n/)) {
     const line = raw.replace(/^\s*(?:[-*>]\s+)?/, '').replace(/`/g, '');
     for (const { kind, re } of LINES) {
