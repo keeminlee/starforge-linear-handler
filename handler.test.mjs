@@ -80,10 +80,17 @@ test('dry run: says what it would do, writes nothing', async () => {
   const r = await handle(event('ready_for_review'), L, { dry: true });
   assert.deepEqual(L.calls, []); assert.deepEqual(r.did, ['WLD-51: Building → In Review']);
 });
-test('a ready PR with no done line: the check fails, Linear still moves by the branch', async () => {
+// Darko 2026-10-21 11:34: a ready PR moves its issue only when its done line finishes it (closes, or the last part);
+// with no line the handler never guesses "done", so the issue the branch names holds where it is
+test('a ready PR with no done line: the check fails, and the issue the branch names holds its state', async () => {
   const L = stubLinear({ 'WLD-51': { state: 'Building' } });
   const r = await handle(event('ready_for_review', { body: 'no line' }), L);
   assert.equal(r.check.ok, false);
+  assert.deepEqual(L.calls.filter((c) => c[0] === 'state'), []);
+});
+test('a ready PR that closes its issue moves it to In Review', async () => {
+  const L = stubLinear({ 'WLD-51': { state: 'Building' } });
+  await handle(event('ready_for_review', { body: 'closes WLD-51' }), L);
   assert.deepEqual(L.calls, [['state', 'id-WLD-51', 's-In Review']]);
 });
 

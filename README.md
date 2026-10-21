@@ -8,8 +8,9 @@ postmark-telemetry `docs/canon/`). Every PR event in postmark-town's repos runs 
   leaves one note.
 - **The done line** is one required line in the PR body: `closes WLD-51`, `part 1 of 2 · WLD-51` or
   `unsure · WLD-51`. A ready PR without one fails this check.
-- **The moves:** a draft PR opens to Building, and a ready PR to In Review. A merge goes by its done line: closes is
-  routed by repo and base; a part stays Building; unsure (or no line) holds the state, leaves a note, and delegates
+- **The moves:** a draft PR opens to Building. A ready PR (opened or marked ready) moves its issue to In Review only
+  when it finishes it: a `closes` line or the last part (`part M of M`); an earlier part, unsure or no line leaves the
+  state where it is. A merge goes by its done line: closes is routed by repo and base; a part stays Building; unsure (or no line) holds the state, leaves a note, and delegates
   the issue to the lane's first rung.
 - Only our own authors' PRs touch Linear: the pod Apps, wright-starforge and keeminlee. A fork's PR never does. The
   handler never checks out or runs PR code.
