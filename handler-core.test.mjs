@@ -63,6 +63,31 @@ test('A: a draft PR (house rule 7, the lane\'s first act) → Building', () => {
 });
 test('B: opened ready → In Review', () => assert.equal(run('opened', {}, issue('Building')).move, 'In Review'));
 test('B: marked ready → In Review (rule 7: In Review is the handoff)', () => assert.equal(run('ready_for_review', {}, issue('Building')).move, 'In Review'));
+// A ready PR moves its issue to In Review only when it finishes it (Darko 2026-10-21 11:34): closes, or the last part.
+test('B: opened ready, closes → In Review', () => assert.equal(run('opened', { body: 'closes WLD-51' }, issue('Building')).move, 'In Review'));
+test('B: opened ready, the last part (2 of 2) → In Review', () => {
+  assert.equal(run('opened', { body: 'part 2 of 2 · WLD-51' }, issue('Building')).move, 'In Review');
+  assert.equal(run('ready_for_review', { body: 'part 3 of 3 · WLD-51' }, issue('Building')).move, 'In Review');
+});
+test('B: opened ready, an earlier part (1 of 3) → no move (more PRs coming)', () => {
+  assert.equal(run('opened', { body: 'part 1 of 3 · WLD-51' }, issue('Building')).move, null);
+  assert.equal(run('ready_for_review', { body: 'part 2 of 3 · WLD-51' }, issue('Building')).move, null);
+});
+test('B: opened ready, unsure → no move (the world#266 case: WLD-25 stayed Building)', () => {
+  const r = decide({ event: 'opened', pr: pr({ repo: 'postmark-town/postmark-world', number: 266, base: 'main', author: 'wright-starforge', headRef: 'wld-25-named-creature', body: 'unsure · WLD-25' }), issue: issue('Building', 'WLD-25') });
+  assert.equal(r.move, null);
+  assert.equal(r.note, null);
+  assert.equal(r.check.ok, true);
+  assert.equal(run('ready_for_review', { body: 'unsure · WLD-51' }, issue('Building')).move, null);
+});
+test('B: opened ready with no done line → no move, and its check fails', () => {
+  const r = run('opened', { body: 'fixes it' }, issue('Building'));
+  assert.equal(r.move, null);
+  assert.equal(r.check.ok, false);
+});
+test('A: a draft still opens to Building, whatever its done line', () => {
+  for (const body of ['closes WLD-51', 'part 1 of 3 · WLD-51', 'unsure · WLD-51', '']) assert.equal(run('opened', { draft: true, body }, issue('Queued')).move, 'Building', body);
+});
 test('A: never backwards: a new PR on a row already On the Train leaves it', () => assert.equal(run('opened', { draft: true }, issue('On the Train')).move, null));
 test('A: already In Review: no move', () => assert.equal(run('ready_for_review', {}, issue('In Review')).move, null));
 test('B: other events (synchronize, edited, closed unmerged) move nothing', () => {

@@ -146,8 +146,13 @@ export function decide({ event, pr, issue }) {
     return { move: issue.state === 'In Review' ? 'Building' : null, note: null, ladder: null, check };
   }
   if (!merged) {
-    const to = pr.draft ? 'Building' : 'In Review';
-    return { move: forward(issue.state, to) ? to : null, note: null, ladder: null, check };
+    if (pr.draft) return { move: forward(issue.state, 'Building') ? 'Building' : null, note: null, ladder: null, check };
+    // A READY PR MOVES ITS ISSUE TO IN REVIEW ONLY WHEN IT FINISHES IT (Darko 2026-10-21 11:34, on Wright's rule): a
+    // `closes` line or the last part (part M of M), the same reading a merge makes. An earlier part, an unsure or no
+    // done line leaves the state where it is: an umbrella issue's other lanes are still building (world#266 opened
+    // `unsure · WLD-25` and moved WLD-25 to In Review with four lanes on it).
+    const finishes = !d.error && (d.kind === 'closes' || (d.kind === 'part' && d.n === d.m));
+    return { move: finishes && forward(issue.state, 'In Review') ? 'In Review' : null, note: null, ladder: null, check };
   }
 
   // a merge: the done line decides; a missing one is an unsure (the handler never guesses "done")
