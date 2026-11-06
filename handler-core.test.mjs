@@ -22,6 +22,11 @@ test('done line: two different ones are refused', () => assert.match(doneLine('c
 test('done line: the same one twice is one', () => assert.equal(doneLine('closes WLD-51\n\ncloses WLD-51').kind, 'closes'));
 test('done line: an impossible part is refused', () => assert.match(doneLine('part 3 of 2 · WLD-51').error, /not a part/));
 test('done line: another team is not ours', () => assert.equal(doneLine('closes ABC-1').error, 'no done line'));
+// STAR-141: Postmark Linear's CORE and CON teams are ours too; until this, "closes CORE-25" (office #935) read as no done line.
+test('done line: CORE and CON are our teams (STAR-141)', () => {
+  assert.deepEqual(doneLine('closes CORE-25'), { kind: 'closes', key: 'CORE-25' });
+  assert.deepEqual(doneLine('closes CON-6'), { kind: 'closes', key: 'CON-6' });
+});
 test('branch key (house rule 7)', () => {
   assert.equal(branchKey('wld-9-own-home-in-bare-read'), 'WLD-9');
   assert.equal(branchKey('pos-516'), 'POS-516');
