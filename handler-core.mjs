@@ -94,9 +94,9 @@ export function routeOf(repo, base, files = null) {
 }
 
 // Our authors, and whose court a lane of theirs is in (Wright, 10-14 18:24: the pod Apps' bots, wright-starforge
-// and keeminlee; in-session Plumb pushes as wright-starforge). Anyone else's PR never touches Linear, not even a note,
+// and keeminlee; in-session Plumb pushes as wright-starforge; a lane of Jetto's pushes as his App, and its Unsure is his). Anyone else's PR never touches Linear, not even a note,
 // and a merge counts only when one of them merged it (review-handler #2).
-export const AUTHORS = { 'rivet-starforge[bot]': 'rivet', 'bevel-starforge[bot]': 'bevel', 'wright-starforge': 'wright', keeminlee: 'wright' };
+export const AUTHORS = { 'rivet-starforge[bot]': 'rivet', 'bevel-starforge[bot]': 'bevel', 'jetto-starforge[bot]': 'jetto', 'wright-starforge': 'wright', keeminlee: 'wright' };
 /** The rung a PR's author answers to, or null for an author who is not ours (gh prints an App as app/<slug>). */
 export function rungOf(login) {
   const l = String(login ?? '').replace(/^app\/(.+)$/, '$1[bot]');
