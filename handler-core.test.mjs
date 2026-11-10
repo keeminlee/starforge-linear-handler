@@ -57,9 +57,9 @@ for (const state of ['Gated', 'Needs a Sitting', "Darko's Call"]) {
     });
   }
 }
-test("B: Gated's note names the holder's own move out; the rest of the red zone keeps 'only a hand' (STAR-152)", () => {
+test("B: Gated's note names who lifts it, its gater or named lifter; the rest of the red zone keeps 'only a hand' (STAR-172)", () => {
   const g = run('closed', { merged: true }, issue('Gated')).note;
-  assert.match(g, /its holder moves it out once the gate it named is met: linear-plan move WLD-51 "<state>", with the evidence/);
+  assert.match(g, /whoever put it into Gated, or the lifter its Gate line names, moves it out once the gate is met: linear-plan move WLD-51 "<state>", with the evidence/);
   assert.doesNotMatch(g, /only a hand/);
   for (const s of ['Needs a Sitting', "Darko's Call"]) assert.match(run('closed', { merged: true }, issue(s)).note, /red zone: only a hand moves it out/);
 });
