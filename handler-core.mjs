@@ -134,7 +134,12 @@ export function decide({ event, pr, issue }) {
 
   // one note per PR, whatever the event (review-handler #7): its words never depend on which event this is
   if (RED_ZONE.has(issue.state)) {
-    return { move: null, ladder: null, check, note: `${label(pr)} names ${key}; it stays in ${issue.state} (red zone: only a hand moves it out).` };
+    // Gated is its holder's to leave once the gate it named is met (STAR-152, Darko 2026-11-09 20:19 EST); the rest of
+    // the red zone only a hand leaves. Either way the handler moves nothing here.
+    const leave = issue.state === 'Gated'
+      ? `its holder moves it out once the gate it named is met: linear-plan move ${key} "<state>", with the evidence`
+      : 'red zone: only a hand moves it out';
+    return { move: null, ladder: null, check, note: `${label(pr)} names ${key}; it stays in ${issue.state} (${leave}).` };
   }
   if (mismatch) {
     return { move: null, ladder: null, check, note: `${label(pr)}: ${mismatch}, so nothing moved; fix one of them.` };
