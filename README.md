@@ -4,8 +4,9 @@ The one thing that moves Postmark's Linear issue states automatically (the lifec
 postmark-telemetry `docs/canon/`). Every PR event in postmark-town's repos runs it through a ~10-line caller
 (`caller/linear-handler.yml`, copied into each repo's `.github/workflows/`), which calls the reusable workflow here.
 
-- **The red zone** (Gated, Needs a Sitting, Darko's Call) is left only by a hand. A PR event there moves nothing and
-  leaves one note.
+- **The red zone** (Gated, Needs a Sitting, Darko's Call): a PR event there moves nothing and leaves one note. Needs a
+  Sitting and Darko's Call are left only by a hand; Gated is left by its holder once the gate it named is met
+  (`linear-plan move`, with the evidence; STAR-152, Darko 2026-11-09), and its note says so.
 - **The done line** is one required line in the PR body: `closes WLD-51`, `part 1 of 2 · WLD-51` or
   `unsure · WLD-51`. A ready PR without one fails this check.
 - **The moves:** a draft PR opens to Building. A ready PR (opened or marked ready) moves its issue to In Review only

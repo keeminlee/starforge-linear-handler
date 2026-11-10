@@ -57,6 +57,12 @@ for (const state of ['Gated', 'Needs a Sitting', "Darko's Call"]) {
     });
   }
 }
+test("B: Gated's note names the holder's own move out; the rest of the red zone keeps 'only a hand' (STAR-152)", () => {
+  const g = run('closed', { merged: true }, issue('Gated')).note;
+  assert.match(g, /its holder moves it out once the gate it named is met: linear-plan move WLD-51 "<state>", with the evidence/);
+  assert.doesNotMatch(g, /only a hand/);
+  for (const s of ['Needs a Sitting', "Darko's Call"]) assert.match(run('closed', { merged: true }, issue(s)).note, /red zone: only a hand moves it out/);
+});
 test("B: the WLD-51 case: five PR events, Darko's Call never left", () => {
   for (const e of ['opened', 'ready_for_review', 'closed']) assert.equal(run(e, { merged: e === 'closed' }, issue("Darko's Call")).move, null);
 });
