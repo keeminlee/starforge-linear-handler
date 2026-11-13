@@ -157,7 +157,12 @@ export function decide({ event, pr, issue }) {
     // done line leaves the state where it is: an umbrella issue's other lanes are still building (world#266 opened
     // `unsure · WLD-25` and moved WLD-25 to In Review with four lanes on it).
     const finishes = !d.error && (d.kind === 'closes' || (d.kind === 'part' && d.n === d.m));
-    return { move: finishes && forward(issue.state, 'In Review') ? 'In Review' : null, note: null, ladder: null, check };
+    if (finishes) return { move: forward(issue.state, 'In Review') ? 'In Review' : null, note: null, ladder: null, check };
+    // A ready PR that doesn't finish its issue still means a lane has started, so from Queued it takes the issue to
+    // Building, as a draft would. world#295 opened ready as part 1 of 3 and left WLD-97 in Queued, where no seat may move
+    // it (Bevel's FAULT, 2026-11-13). Only from Queued (Wright, 16:05 EST: "Ready means nobody has picked the issue, and
+    // picking is Darko's", TRACKING § Queued); never to In Review, never backwards.
+    return { move: issue.state === 'Queued' ? 'Building' : null, note: null, ladder: null, check };
   }
 
   // a merge: the done line decides; a missing one is an unsure (the handler never guesses "done")

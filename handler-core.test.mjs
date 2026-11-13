@@ -84,6 +84,18 @@ test('B: opened ready, an earlier part (1 of 3) → no move (more PRs coming)', 
   assert.equal(run('opened', { body: 'part 1 of 3 · WLD-51' }, issue('Building')).move, null);
   assert.equal(run('ready_for_review', { body: 'part 2 of 3 · WLD-51' }, issue('Building')).move, null);
 });
+// WLD-97 (2026-11-13): a ready PR that doesn't finish its issue takes it from Queued to Building, as a draft would;
+// only from Queued (Wright 16:05: Ready isn't picked yet), never to In Review, never backwards
+test('B: ready, not finishing, from Queued → Building (the world#295 case)', () => {
+  for (const e of ['opened', 'ready_for_review']) for (const body of ['part 1 of 3 · WLD-51', 'unsure · WLD-51', 'fixes it']) assert.equal(run(e, { body }, issue('Queued')).move, 'Building', `${e} · ${body}`);
+});
+test('B: ready, not finishing, from Ready or Backlog → no move (picking is Darko\'s)', () => {
+  for (const s of ['Ready', 'Backlog']) assert.equal(run('ready_for_review', { body: 'part 1 of 3 · WLD-51' }, issue(s)).move, null, s);
+});
+test('B: ready, not finishing, never backwards and never to In Review', () => {
+  for (const s of ['In Review', 'On the Train', 'Shipped']) assert.equal(run('ready_for_review', { body: 'part 1 of 3 · WLD-51' }, issue(s)).move, null, s);
+});
+test('B: ready and finishing, from Queued → In Review (unchanged)', () => assert.equal(run('opened', { body: 'closes WLD-51' }, issue('Queued')).move, 'In Review'));
 test('B: opened ready, unsure → no move (the world#266 case: WLD-25 stayed Building)', () => {
   const r = decide({ event: 'opened', pr: pr({ repo: 'postmark-town/postmark-world', number: 266, base: 'main', author: 'wright-starforge', headRef: 'wld-25-named-creature', body: 'unsure · WLD-25' }), issue: issue('Building', 'WLD-25') });
   assert.equal(r.move, null);
