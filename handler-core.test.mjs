@@ -180,6 +180,7 @@ test('rungs: a pod App is its lead; Wright for in-session and Keemin; a meep app
   assert.equal(rungOf('app/bevel-starforge'), 'bevel');
   assert.equal(rungOf('jetto-starforge[bot]'), 'jetto');
   assert.equal(rungOf('app/jetto-starforge'), 'jetto');
+  assert.equal(rungOf('app/facet-starforge'), 'facet'); // CORE-88: Facet's PRs read "not one of our authors"
   assert.equal(rungOf('wright-starforge'), 'wright');
   assert.equal(rungOf('keeminlee'), 'wright');
   for (const who of ['rei-starforge', 'postmark-architect-meep', 'foundoutanyway', undefined]) assert.equal(rungOf(who), null);
