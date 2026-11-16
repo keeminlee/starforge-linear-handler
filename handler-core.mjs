@@ -119,7 +119,7 @@ export function decide({ event, pr, issue }) {
   const check = mismatch
     ? { ok: false, summary: `done line: ${mismatch}; fix one of them` }
     : d.error
-      ? (isReadyEvent ? { ok: false, summary: `done line: ${d.error}. Add one line: "closes WLD-51", "part 1 of 2 · WLD-51" or "unsure · WLD-51"` } : { ok: true, summary: `done line: ${d.error} (needed when the PR is ready)` })
+      ? (isReadyEvent ? { ok: false, summary: `done line: ${d.error}. Add one line: "closes WLD-51" or "unsure · WLD-51" (an issue in several pieces gets a sub-issue per piece; a lane writes no "part N of M")` } : { ok: true, summary: `done line: ${d.error} (needed when the PR is ready)` })
       : { ok: true, summary: `done line: ${d.kind === 'part' ? `part ${d.n} of ${d.m}` : d.kind} · ${d.key}` };
 
   if (!rungOf(pr.author)) return none({ ok: true, summary: 'not one of our authors; Linear untouched' });

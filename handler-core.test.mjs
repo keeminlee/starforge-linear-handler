@@ -42,6 +42,12 @@ test('B: the issue is not on Linear → nothing, and the check says so', () => {
   const r = run('ready_for_review', {}, null);
   assert.equal(r.move, null); assert.match(r.check.summary, /not found/);
 });
+test('B: a ready PR with no done line: the hint offers closes or unsure, never "part N of M" (TRACKING; Darko 2026-11-05)', () => {
+  const r = run('ready_for_review', { body: 'no line here' }, issue('Building'));
+  assert.equal(r.check.ok, false);
+  assert.match(r.check.summary, /closes WLD-51/); assert.match(r.check.summary, /unsure · WLD-51/);
+  assert.doesNotMatch(r.check.summary, /part \d+ of \d+ ·/);
+});
 test('B: a PR from outside our authors never moves Linear', () => {
   const r = run('closed', { merged: true, author: 'a-stranger' }, issue('In Review'));
   assert.equal(r.move, null); assert.equal(r.note, null);
