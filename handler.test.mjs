@@ -2,7 +2,7 @@
 // Run: node --test handler.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { handle as handleWith, prOf } from './handler.mjs';
+import { handle as handleWith, handleTag, prOf, tagPrsWith } from './handler.mjs';
 const handle = (ev, L, opts) => handleWith(ev, { linear: L, files: async () => ['tools/x.mjs'] }, opts);
 
 const STATES = ['Backlog', 'Ready', 'Queued', 'Building', 'In Review', 'On the Train', 'Awaiting Settlement', 'Hotfixed', 'Shipped', 'Gated', 'Needs a Sitting', "Darko's Call"];
@@ -121,6 +121,81 @@ test('#6: a files read that fails is a note, never a guess', async () => {
   const r = await handleWith(event('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main' }), { linear: L, files: async () => { throw new Error('403'); } });
   assert.equal(r.move, null); assert.match(r.note, /could not be read/);
 });
+// ── STAR-203: a takes-main PR never reads Linear ──
+test('STAR-203: a takes-main PR (branch or title) passes with no Linear client made', async () => {
+  for (const o of [{ head: 'take-main/2026-w47', body: '' }, { head: 'x', body: '', title: 'train/2026-w47 takes main at 9be687d1f' }]) {
+    let made = 0;
+    const ev = event('opened', o); ev.pull_request.title = o.title ?? 'x';
+    const r = await handleWith(ev, { linear: async () => { made += 1; return null; } });
+    assert.equal(made, 0); assert.equal(r.check.ok, true); assert.match(r.check.summary, /takes main/);
+  }
+});
+
+// ── STAR-203: Hotfixed at the tag, on a fixture commit range through a fake GitHub ──
+const REPO = 'postmark-town/postmark-office';
+const apiPr = (n, o = {}) => ({ number: n, draft: false, merged: o.merged ?? true, title: o.title ?? `PR ${n}`, body: o.body ?? 'closes WLD-51',
+  base: { ref: o.base ?? 'main' }, head: { ref: o.head ?? 'hotfix/x', repo: { full_name: REPO } }, user: { login: o.author ?? 'jetto-starforge[bot]' }, merged_by: { login: 'wright-starforge' } });
+function fakeApi(over = {}) {
+  const served = [];
+  const routes = {
+    [`/repos/${REPO}/git/matching-refs/tags/release/?per_page=100&page=1`]: ['release/2026-w47.16', 'release/2026-w47.17', 'release/2026-w47.18', 'release/2026-w47.9'].map((t) => ({ ref: `refs/tags/${t}` })),
+    [`/repos/${REPO}/compare/release%2F2026-w47.17...release%2F2026-w47.18`]: { ahead_by: 4, commits: ['Fix the doorstep (#1122)', 'Merge pull request #1124 from postmark-town/pos-1081', 'Bump (#1125)', 'chore: no pr'].map((message) => ({ commit: { message } })) },
+    [`/repos/${REPO}/pulls/1122`]: apiPr(1122),
+    [`/repos/${REPO}/pulls/1124`]: apiPr(1124, { base: 'train/2026-w47', body: 'closes WLD-51', head: 'wld-51-copy' }),
+    [`/repos/${REPO}/pulls/1125`]: apiPr(1125, { head: 'take-main/2026-w47', body: '', title: 'train/2026-w47 takes main at abc' }),
+    ...over,
+  };
+  const api = async (path) => { served.push(path); if (!(path in routes)) throw new Error(`unexpected GitHub read ${path}`); return routes[path]; };
+  api.served = served;
+  return api;
+}
+const tagEvent = (tag = 'release/2026-w47.18', repo = REPO) => ({ ref: `refs/tags/${tag}`, repository: { full_name: repo } });
+
+test('STAR-203 tag mode: the range between the previous release tag and this one yields the PRs its commits name', async () => {
+  const api = fakeApi();
+  const { prs, prev } = await tagPrsWith(api, REPO, 'release/2026-w47.18');
+  assert.equal(prev, 'release/2026-w47.17');
+  assert.deepEqual(prs.map((p) => [p.number, p.base]), [[1122, 'main'], [1124, 'train/2026-w47'], [1125, 'main']]);
+  assert.ok(!api.served.some((p) => p.includes('1126')));
+});
+test('STAR-203 tag mode: a live tag sets the hotfix PR\'s issue to Hotfixed with a note naming the tag; the train copy and takes-main PRs add nothing', async () => {
+  const L = stubLinear({ 'WLD-51': { state: 'In Review' } });
+  const r = await handleTag(tagEvent(), { linear: L, tagPrs: (repo, tag) => tagPrsWith(fakeApi(), repo, tag) });
+  assert.deepEqual(L.calls.map((c) => c.slice(0, 3)).map((c) => (c[0] === 'comment' ? ['comment', c[1]] : c)), [['state', 'id-WLD-51', 's-Hotfixed'], ['comment', 'id-WLD-51']]);
+  assert.match(L.calls[1][2], /release\/2026-w47\.18 is live and contains postmark-office#1122/);
+  assert.equal(r.did.length, 2);
+});
+test('STAR-203 tag mode: a re-run is quiet (already Hotfixed: nothing; the note is never posted twice)', async () => {
+  const done = stubLinear({ 'WLD-51': { state: 'Hotfixed' } });
+  await handleTag(tagEvent(), { linear: done, tagPrs: (repo, tag) => tagPrsWith(fakeApi(), repo, tag) });
+  assert.deepEqual(done.calls, []);
+  const first = stubLinear({ 'WLD-51': { state: 'In Review' } });
+  const r = await handleTag(tagEvent(), { linear: first, tagPrs: (repo, tag) => tagPrsWith(fakeApi(), repo, tag) }, { dry: true });
+  assert.deepEqual(first.calls, []); assert.match(r.did[0], /In Review → Hotfixed/);
+});
+test('STAR-203 tag mode: a Linear team without a Hotfixed state fails the step (after the other issues are done), and writes nothing', async () => {
+  const L = { ...stubLinear({ 'WLD-51': { state: 'In Review' } }), stateId: async () => null };
+  await assert.rejects(() => handleTag(tagEvent(), { linear: L, tagPrs: (repo, tag) => tagPrsWith(fakeApi(), repo, tag) }), /has no state "Hotfixed"/);
+  assert.deepEqual(L.calls, []);
+});
+test('STAR-203 tag mode: no previous tag, or a ship-sized range, is a note and no Linear client', async () => {
+  let made = 0;
+  const linear = async () => { made += 1; return null; };
+  const none = await handleTag(tagEvent('release/2026-w40'), { linear, tagPrs: (repo, tag) => tagPrsWith(fakeApi(), repo, tag) });
+  assert.match(none.check.summary, /no previous release tag/);
+  const big = fakeApi({ [`/repos/${REPO}/compare/release%2F2026-w47.17...release%2F2026-w47.18`]: { ahead_by: 400, commits: Array.from({ length: 250 }, () => ({ commit: { message: 'x (#1)' } })) } });
+  const r = await handleTag(tagEvent(), { linear, tagPrs: (repo, tag) => tagPrsWith(big, repo, tag) });
+  assert.match(r.check.summary, /too many to read as a hotfix/);
+  assert.equal(made, 0);
+});
+test('STAR-203 tag mode: a repo with no hotfix tags (world) or a non-release ref never reads GitHub or Linear', async () => {
+  const boom = () => { throw new Error('must not be called'); };
+  const w = await handleTag(tagEvent('release/2026-w47.18', 'postmark-town/postmark-world'), { linear: boom, tagPrs: boom });
+  assert.match(w.check.summary, /no hotfix tags/);
+  const v = await handleTag({ ref: 'refs/tags/v1', repository: { full_name: REPO } }, { linear: boom, tagPrs: boom });
+  assert.match(v.check.summary, /not a release tag/);
+});
+
 test('#8: a dry run says the note, and a repeat says "note already there"', async () => {
   const first = stubLinear({ 'WLD-51': { state: 'Gated' } });
   const r = await handle(event('ready_for_review'), first, { dry: true });

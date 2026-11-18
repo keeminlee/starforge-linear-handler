@@ -55,6 +55,17 @@ which is the PR author's to fix and never an alarm.
 - **A part merge** (`part N of M`, N < M) moves Queued or In Review back to Building. It never moves Backlog or Ready,
   which no lane had started. The check refuses a ready PR that carries one (above), so this is the old behaviour for a
   PR that got through anyway.
+- **Hotfixed at the tag (STAR-203).** The caller's `on: push: tags: ["release/*"]` fires on a hand-pushed release tag
+  (a tag pushed with `GITHUB_TOKEN`, the weekly ship's own, fires nothing). In office, site and town the handler reads
+  the commits between the previous release tag (by week, then patch number) and this one, finds the PRs they name,
+  and sets each PR's issue to Hotfixed when the PR merged into `main` from a branch that is not `train/*` or
+  `take-main/*`, by one of ours, with a `closes`, `unsure` or last-part done line. It moves from Building, In Review,
+  On the Train or Awaiting Settlement, never from a done-type state or the red zone, and leaves one note naming the tag.
+  A range with no previous tag, or ship-sized (250 commits, 100 PRs), is read by a hand.
+- **A train copy of a hotfix doesn't ride the train.** A `closes X` merge into `train/*` while the handler's own
+  hotfix note for X is on the issue (a `closes X` PR already merged into `main`) moves nothing: X waits for its tag.
+- **A takes-main PR carries no issue.** A head branch `take-main/*`, or a title `train/<week> takes main at <sha>`,
+  passes the check with a note, and nothing moves.
 - **A done state is never moved back** (Hotfixed, Shipped, Done; STAR-203). A hotfix's train copy merging after the tag
   leaves the issue where it is, with one note saying so.
 - **An HTML comment is never a done line:** only a visible line counts.

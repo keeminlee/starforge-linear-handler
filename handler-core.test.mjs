@@ -2,9 +2,9 @@
 // Run: node --test handler-core.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, doneLine, branchKey, pathsOf, routeOf, rungOf } from './handler-core.mjs';
+import { decide, doneLine, branchKey, pathsOf, routeOf, rungOf, DONE_STATES, previousTag, prNumbersOf, tagIntents, decideTag, isHotfixRepo, tagOf } from './handler-core.mjs';
 
-const pr = (o = {}) => ({ repo: 'postmark-town/postmark-office', number: 51, base: 'train/2026-w43', draft: false, merged: false, author: 'bevel-starforge[bot]', mergedBy: 'wright-starforge', files: null, headRef: 'wld-51-fix', body: 'Fixes the thing.\n\ncloses WLD-51\n', ...o });
+const pr = (o = {}) => ({ repo: 'postmark-town/postmark-office', number: 51, base: 'train/2026-w43', draft: false, merged: false, author: 'bevel-starforge[bot]', mergedBy: 'wright-starforge', files: null, headRef: 'wld-51-fix', title: 'A fix', body: 'Fixes the thing.\n\ncloses WLD-51\n', ...o });
 const issue = (state, key = 'WLD-51') => ({ key, state });
 const run = (event, p, i) => decide({ event, pr: pr(p), issue: i });
 
@@ -289,6 +289,128 @@ test('STAR-203: a train copy merging for an issue already Hotfixed/Shipped/Done 
 });
 test('STAR-203 control: the other states keep the old note (a Backlog issue is still set by hand)', () => {
   assert.match(run('closed', { merged: true }, issue('Backlog')).note, /is in Backlog, not Building or In Review, so the merge moved nothing; set it by hand/);
+});
+
+// ── STAR-203 rule 2: a train copy of a hotfix that is on main does not move the issue (the POS-1081 shape) ──
+// POS-1081 (2026-11-18): hotfix #1122 merged to main (a note, state held In Review); its train copy #1123 merged into the
+// train at 05:17 and the handler moved In Review → On the Train, so a hotfix read as riding the train until its tag.
+// RULED (Wright for Darko's STAR-197 go, 2026-11-18): a `closes X` PR into train/* must not move X while a `closes X` PR
+// has already merged into main; X stays, with a note, and Hotfixed comes at the tag.
+const hotfixNoteFor = (key = 'WLD-51', o = {}) => decide({ event: 'closed', pr: pr({ merged: true, base: 'main', ...o }), issue: issue('In Review', key) }).note;
+const withNotes = (state, notes, key = 'WLD-51') => ({ ...issue(state, key), handlerNotes: notes });
+test('STAR-203: the POS-1081 shape: hotfix merged to main, then its train copy merges: the issue stays, with the note', () => {
+  for (const repo of ['postmark-town/postmark-office', 'postmark-town/postmark-site', 'postmark-town/postmark']) {
+    const hot = hotfixNoteFor('WLD-51', { repo, number: 1122, files: ['src/lib/b.ts'] });
+    assert.match(hot, /as a hotfix/, repo);
+    const r = run('closed', { merged: true, repo, number: 1123, base: 'train/2026-w47' }, withNotes('In Review', [hot]));
+    assert.equal(r.move, null, repo);
+    assert.match(r.note, /a train copy of a hotfix that's on main; Hotfixed comes at the tag/, repo);
+    assert.match(r.note, /stays in In Review/, repo);
+  }
+});
+test('STAR-203 control: the same train merge with no hotfix on main moves the issue to On the Train as before', () => {
+  assert.equal(run('closed', { merged: true, base: 'train/2026-w47' }, withNotes('In Review', [])).move, 'On the Train');
+  assert.equal(run('closed', { merged: true, base: 'train/2026-w47' }, issue('In Review')).move, 'On the Train');
+});
+test('STAR-203 control: a hotfix note for another issue, or an unrelated note, does not hold this one', () => {
+  const other = hotfixNoteFor('WLD-9', { headRef: 'wld-9-fix', body: 'closes WLD-9' });
+  for (const notes of [[other], ['Unsure (postmark-office#7 merged): does it finish WLD-51? Asking up the ladder.']]) {
+    assert.equal(run('closed', { merged: true, base: 'train/2026-w47' }, withNotes('In Review', notes)).move, 'On the Train');
+  }
+});
+test('STAR-203 control: a hotfix elsewhere does not hold a world merge (main is its own route)', () => {
+  const hot = hotfixNoteFor('WLD-51', { files: ['src/lib/b.ts'] });
+  assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-world', base: 'main' }, withNotes('In Review', [hot])).move, 'Awaiting Settlement');
+});
+
+// ── STAR-203 rule 3: the takes-main PR carries no issue by design ──
+// RULED (2026-11-18): a PR whose head branch starts `take-main/`, or whose title is `train/<week> takes main at <sha>`,
+// passes the done-line check with a note and the handler moves nothing for it (office #1127 was red on `linear / linear`
+// only for that).
+test('STAR-203: a take-main/ branch or a "takes main at" title passes the check on a ready PR, with no move', () => {
+  for (const o of [{ headRef: 'take-main/2026-w47', body: '' }, { headRef: 'train-takes-main', title: 'train/2026-w47 takes main at 9be687d1f', body: '' }, { headRef: 'take-main/2026-w47', body: 'closes WLD-51' }]) {
+    for (const e of ['opened', 'ready_for_review', 'edited']) {
+      const r = run(e, o, issue('Building'));
+      assert.equal(r.check.ok, true, `${e} · ${JSON.stringify(o)}`);
+      assert.match(r.check.summary, /takes main/, JSON.stringify(o));
+      assert.equal(r.move, null); assert.equal(r.note, null);
+    }
+    const m = run('closed', { ...o, merged: true, base: 'train/2026-w47' }, issue('In Review'));
+    assert.equal(m.move, null); assert.equal(m.note, null); assert.equal(m.ladder, null);
+  }
+});
+test('STAR-203 control: other PRs with no done line still fail; a lookalike title or branch is not exempt', () => {
+  for (const o of [{ headRef: 'wld-51-fix', body: '' }, { headRef: 'take-main-ish', body: '' }, { headRef: 'wld-51-fix', title: 'train/2026-w47 takes main later', body: '' }, { headRef: 'wld-51-fix', title: 'fix: takes main at the door', body: '' }]) {
+    assert.equal(run('ready_for_review', o, issue('Building')).check.ok, false, JSON.stringify(o));
+  }
+});
+
+// ── STAR-203 rule 1: Hotfixed at the tag (the handler's tag mode, on a fixture commit range) ──
+// RULED (2026-11-18): the callers gain `on: push: tags: ['release/*']`; the handler lists the PRs merged into main
+// between the previous release/* tag and this one (their commit subjects name the PR), and moves each one's `closes X`
+// (or `unsure · X`) issue to Hotfixed unless it is already done-type, with a note naming the tag.
+const TAGS = ['release/2026-w47.9', 'release/2026-w47.10', 'release/2026-w47.17', 'release/2026-w47.18', 'release/2026-w48', 'release/2026-w46.3', 'release/2026-w47', 'release/not-a-week', 'hotfix/x'];
+test('tag mode: the previous release tag, by week then patch number (w47.9 < w47.10, w47 < w47.1)', () => {
+  assert.equal(previousTag('release/2026-w47.18', TAGS), 'release/2026-w47.17');
+  assert.equal(previousTag('release/2026-w47.10', TAGS), 'release/2026-w47.9');
+  assert.equal(previousTag('release/2026-w48', TAGS), 'release/2026-w47.18');
+  assert.equal(previousTag('release/2026-w47', TAGS), 'release/2026-w46.3');
+  assert.equal(previousTag('release/2026-w46.3', TAGS), null);
+  assert.equal(previousTag('release/2026-w47.9', ['release/2026-w47.9', 'release/2026-w47']), 'release/2026-w47');
+  assert.equal(previousTag('release/not-a-week', TAGS), null);
+});
+test('tag mode: the PR numbers a commit range names (squash and merge subjects), once each, in order', () => {
+  const commits = ['Fix the doorstep (#1122)', 'Merge pull request #1123 from postmark-town/hotfix/x', 'chore: no pr here', 'Fix the doorstep (#1122)', 'Revert "x (#9)" (#1130)', 'merge (#12) trailing'].map((message) => ({ commit: { message: `${message}\n\nbody (#999)` } }));
+  assert.deepEqual(prNumbersOf(commits), [1122, 1123, 1130]);
+});
+const hf = (o = {}) => ({ repo: 'postmark-town/postmark-office', number: 1122, base: 'main', headRef: 'hotfix/pos-1081-doorstep', draft: false, merged: true, author: 'jetto-starforge[bot]', mergedBy: 'wright-starforge', title: 'POS-1081: the doorstep', body: 'closes WLD-51', ...o });
+test('tag mode: which PRs in the range name an issue: hotfixes into main by ours, merged by ours, with a done line', () => {
+  const prs = [
+    hf({ number: 1122 }),                                                              // a hotfix
+    hf({ number: 1124, body: 'unsure · POS-5', headRef: 'pos-5-x' }),                    // an unsure still counts
+    hf({ number: 1125, body: 'part 2 of 2 · POS-6', headRef: 'pos-6-x' }),               // the last part finishes
+    hf({ number: 1126, body: 'part 1 of 2 · POS-7', headRef: 'pos-7-x' }),               // an earlier part does not
+    hf({ number: 1127, headRef: 'train/2026-w47', body: 'closes POS-8' }),               // the ship PR carries a train, not an issue
+    hf({ number: 1128, headRef: 'take-main/2026-w47', body: '' }),                       // takes-main
+    hf({ number: 1129, base: 'train/2026-w47', body: 'closes POS-9' }),                  // the train copy
+    hf({ number: 1130, merged: false, body: 'closes POS-10' }),                          // not merged
+    hf({ number: 1131, author: 'a-stranger', body: 'closes POS-11' }),                   // not ours
+    hf({ number: 1132, mergedBy: 'a-stranger', body: 'closes POS-12' }),                 // merged by someone not ours
+    hf({ number: 1133, repo: 'postmark-town/postmark-world', body: 'closes WLD-13' }),   // world's main is its own route
+    hf({ number: 1134, body: 'no line', headRef: 'misc' }),                              // no done line: never guessed
+    hf({ number: 1135, body: 'closes POS-14', headRef: 'pos-99-other' }),                // done line and branch disagree
+  ];
+  assert.deepEqual(tagIntents({ tag: 'release/2026-w47.18', prs }).map((i) => [i.key, i.pr.number]), [['WLD-51', 1122], ['POS-5', 1124], ['POS-6', 1125]]);
+});
+test('tag mode: two PRs naming one issue make one intent', () => {
+  assert.equal(tagIntents({ tag: 't', prs: [hf({ number: 1 }), hf({ number: 2 })] }).length, 1);
+});
+const tagOn = (state, notes = []) => decideTag({ tag: 'release/2026-w47.18', pr: hf(), issue: { ...issue(state), handlerNotes: notes } });
+test('tag mode: the issue moves to Hotfixed from the states a hotfix waits in, with a note naming the tag and the PR', () => {
+  for (const s of ['Building', 'In Review', 'On the Train', 'Awaiting Settlement']) {
+    const r = tagOn(s);
+    assert.equal(r.move, 'Hotfixed', s);
+    assert.match(r.note, /release\/2026-w47\.18/, s); assert.match(r.note, /postmark-office#1122/, s); assert.match(r.note, /WLD-51/, s);
+  }
+});
+test('tag mode: a done-type (or closed-out) issue is left alone, with no note', () => {
+  for (const s of [...DONE_STATES, 'Canceled', 'Duplicate']) { const r = tagOn(s); assert.equal(r.move, null, s); assert.equal(r.note, null, s); }
+});
+test('tag mode: the red zone is never left, and a state no hotfix waits in is a note for a hand', () => {
+  for (const s of ['Gated', 'Needs a Sitting', "Darko's Call"]) { const r = tagOn(s); assert.equal(r.move, null, s); assert.match(r.note, new RegExp(`stays in ${s}`), s); }
+  for (const s of ['Backlog', 'Ready', 'Queued']) { const r = tagOn(s); assert.equal(r.move, null, s); assert.match(r.note, /set it by hand/, s); }
+  assert.deepEqual(tagOn('Some New State').move, null);
+});
+test('tag mode: a missing issue is nothing', () => assert.deepEqual(decideTag({ tag: 't', pr: hf(), issue: null }), { move: null, note: null }));
+test('tag mode: only office, site and town tags are hotfix tags', () => {
+  assert.equal(isHotfixRepo('postmark-town/postmark-office'), true);
+  assert.equal(isHotfixRepo('postmark-town/postmark-site'), true);
+  assert.equal(isHotfixRepo('postmark-town/postmark'), true);
+  for (const r of ['postmark-town/postmark-world', 'postmark-town/postmark-telemetry', 'postmark-town/postmark-blueprints']) assert.equal(isHotfixRepo(r), false, r);
+});
+test('tag mode: a push event is a release tag only for refs/tags/release/*, and not a deletion', () => {
+  assert.equal(tagOf({ ref: 'refs/tags/release/2026-w47.18' }), 'release/2026-w47.18');
+  for (const ev of [{ ref: 'refs/tags/v1' }, { ref: 'refs/heads/main' }, { ref: 'refs/tags/release/2026-w47.18', deleted: true }, { pull_request: {}, ref: 'refs/tags/release/x' }, {}]) assert.equal(tagOf(ev), null, JSON.stringify(ev));
 });
 
 test('#4: a done line inside an HTML comment is not a done line', () => {

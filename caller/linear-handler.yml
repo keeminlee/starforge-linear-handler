@@ -2,13 +2,18 @@
 # same SHA on both lines below. pull_request_target so a fork's PR is seen too; the handler never runs PR code, and
 # acts only for our own authors. It runs dry (it says what it would do) until postmark-town's variable
 # LINEAR_HANDLER_LIVE is 1: the cutover is that one variable, set in the same sitting Linear's own automations go off.
+# A hand-pushed release/* tag (a hotfix's) fires the push trigger: the handler sets the tag's hotfix PRs' issues to
+# Hotfixed (STAR-203). A tag pushed with GITHUB_TOKEN (the weekly ship's own) fires nothing; the ship-week skill sets Shipped.
 name: linear-handler
 on:
   pull_request_target:
     types: [opened, ready_for_review, converted_to_draft, edited, closed]
-# An edit only re-checks the done line, so it never cancels or waits on a move (review-handler #1).
+  push:
+    tags: ["release/*"]
+# An edit only re-checks the done line, so it never cancels or waits on a move (review-handler #1). A tag push has no
+# PR number: it queues on its own ref.
 concurrency:
-  group: linear-handler-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && 'check' || 'move' }}
+  group: linear-handler-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && 'check' || 'move' }}
   cancel-in-progress: false
 permissions:
   contents: read
