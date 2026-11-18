@@ -138,7 +138,7 @@ const apiPr = (n, o = {}) => ({ number: n, draft: false, merged: o.merged ?? tru
 function fakeApi(over = {}) {
   const served = [];
   const routes = {
-    [`/repos/${REPO}/git/matching-refs/tags/release/?per_page=100&page=1`]: ['release/2026-w47.16', 'release/2026-w47.17', 'release/2026-w47.18', 'release/2026-w47.9'].map((t) => ({ ref: `refs/tags/${t}` })),
+    [`/repos/${REPO}/git/matching-refs/tags/release/`]: ['release/2026-w47.16', 'release/2026-w47.17', 'release/2026-w47.18', 'release/2026-w47.9'].map((t) => ({ ref: `refs/tags/${t}` })),
     [`/repos/${REPO}/compare/release%2F2026-w47.17...release%2F2026-w47.18`]: { ahead_by: 4, commits: ['Fix the doorstep (#1122)', 'Merge pull request #1124 from postmark-town/pos-1081', 'Bump (#1125)', 'chore: no pr'].map((message) => ({ commit: { message } })) },
     [`/repos/${REPO}/pulls/1122`]: apiPr(1122),
     [`/repos/${REPO}/pulls/1124`]: apiPr(1124, { base: 'train/2026-w47', body: 'closes WLD-51', head: 'wld-51-copy' }),
@@ -188,10 +188,49 @@ test('STAR-203 tag mode: no previous tag, or a ship-sized range, is a note and n
   assert.match(r.check.summary, /too many to read as a hotfix/);
   assert.equal(made, 0);
 });
-test('STAR-203 tag mode: a repo with no hotfix tags (world) or a non-release ref never reads GitHub or Linear', async () => {
+// Truey on 2262779: matching-refs returns every match in one answer and ignores page and per_page (168 refs on every page
+// in the live office), so a loop re-read them 30 times. It is read once, and the previous tag is found in that one answer.
+test('STAR-203 tag mode: the release tag listing is read once, however many tags there are', async () => {
+  const many = Array.from({ length: 168 }, (_, i) => ({ ref: `refs/tags/release/2026-w${String(10 + Math.floor(i / 10)).padStart(2, '0')}.${i % 10 + 1}` }));
+  many.push({ ref: 'refs/tags/release/2026-w47.17' }, { ref: 'refs/tags/release/2026-w47.18' });
+  const api = fakeApi({ [`/repos/${REPO}/git/matching-refs/tags/release/`]: many });
+  const { prev } = await tagPrsWith(api, REPO, 'release/2026-w47.18');
+  assert.equal(prev, 'release/2026-w47.17');
+  assert.equal(api.served.filter((p) => p.includes('matching-refs')).length, 1);
+  assert.ok(api.served.every((p) => !p.includes('page=')), 'no paged read');
+});
+// Truey finding 6: a "(#N)" in a subject that isn't a PR here is a 404 from pulls/N; it is skipped with a line, never a failure
+test('STAR-203 tag mode: a (#N) that is not a PR (404) is skipped with a summary line, and the rest are read', async () => {
+  const notFound = () => Object.assign(new Error('HTTP 404'), { status: 404 });
+  const base = fakeApi();
+  const api = async (path) => { if (path.endsWith('/pulls/1124')) throw notFound(); return base(path); };
+  const r = await tagPrsWith(api, REPO, 'release/2026-w47.18');
+  assert.deepEqual(r.prs.map((p) => p.number), [1122, 1125]);
+  assert.match(r.skipped[0], /#1124 .* not a PR of postmark-town\/postmark-office \(404\); skipped/);
+  const L = stubLinear({ 'WLD-51': { state: 'In Review' } }), lines = [];
+  const out = await handleTag(tagEvent(), { linear: L, tagPrs: (repo, tag) => tagPrsWith(api, repo, tag) }, { log: (s) => lines.push(s) });
+  assert.ok(lines.some((l) => /#1124 .*\(404\)/.test(l)));
+  assert.match(out.check.summary, /1 skipped/);
+  assert.deepEqual(L.calls.map((c) => c[0]), ['state', 'comment']);
+});
+test('STAR-203 tag mode: any other GitHub failure still fails the run (nothing moves on a half-read range)', async () => {
+  const base = fakeApi();
+  const api = async (path) => { if (path.endsWith('/pulls/1122')) throw Object.assign(new Error('HTTP 502'), { status: 502 }); return base(path); };
+  await assert.rejects(() => tagPrsWith(api, REPO, 'release/2026-w47.18'), /502/);
+});
+test('STAR-203 tag mode: an unsure hotfix at the tag gets a note and no state write', async () => {
+  const L = stubLinear({ 'POS-5': { state: 'In Review' } });
+  const api = fakeApi({ [`/repos/${REPO}/pulls/1122`]: apiPr(1122, { body: 'unsure · POS-5', head: 'pos-5-x' }) });
+  await handleTag(tagEvent(), { linear: L, tagPrs: (repo, tag) => tagPrsWith(api, repo, tag) });
+  assert.deepEqual(L.calls.map((c) => c[0]), ['comment']);
+  assert.match(L.calls[0][2], /an unsure hotfix for POS-5/);
+});
+test('STAR-203 tag mode: a repo with no release tags (the town, world) or a non-release ref never reads GitHub or Linear', async () => {
   const boom = () => { throw new Error('must not be called'); };
-  const w = await handleTag(tagEvent('release/2026-w47.18', 'postmark-town/postmark-world'), { linear: boom, tagPrs: boom });
-  assert.match(w.check.summary, /no hotfix tags/);
+  for (const repo of ['postmark-town/postmark-world', 'postmark-town/postmark']) {
+    const w = await handleTag(tagEvent('release/2026-w47.18', repo), { linear: boom, tagPrs: boom });
+    assert.match(w.check.summary, /no release tags/, repo);
+  }
   const v = await handleTag({ ref: 'refs/tags/v1', repository: { full_name: REPO } }, { linear: boom, tagPrs: boom });
   assert.match(v.check.summary, /not a release tag/);
 });

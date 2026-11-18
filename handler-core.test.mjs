@@ -2,7 +2,7 @@
 // Run: node --test handler-core.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, doneLine, branchKey, pathsOf, routeOf, rungOf, DONE_STATES, previousTag, prNumbersOf, tagIntents, decideTag, isHotfixRepo, tagOf } from './handler-core.mjs';
+import { decide, doneLine, branchKey, pathsOf, routeOf, rungOf, DONE_STATES, previousTag, prNumbersOf, tagIntents, decideTag, hasReleaseTags, tagOf } from './handler-core.mjs';
 
 const pr = (o = {}) => ({ repo: 'postmark-town/postmark-office', number: 51, base: 'train/2026-w43', draft: false, merged: false, author: 'bevel-starforge[bot]', mergedBy: 'wright-starforge', files: null, headRef: 'wld-51-fix', title: 'A fix', body: 'Fixes the thing.\n\ncloses WLD-51\n', ...o });
 const issue = (state, key = 'WLD-51') => ({ key, state });
@@ -147,7 +147,9 @@ test('B: merged, closes, office → main → a hotfix: no move; Hotfixed is set 
   assert.equal(r.move, null); assert.match(r.note, /as a hotfix .* Hotfixed is set at its tag/);
 });
 test('B: merged, closes, town → train → On the Train', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark' }, issue('In Review')).move, 'On the Train'));
-test('B: merged, closes, town → main → a hotfix note, no move', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark', base: 'main' }, issue('In Review')).move, null));
+// until 2026-11-18 this asserted "town → main → a hotfix note, no move" (Hotfixed at a tag). The town has no release tag
+// (SHIPPING § 1: its main is live on merge), so a town hotfix is Hotfixed at the merge (STAR-203, Truey's finding 1).
+test('B: merged, closes, town → main → live on merge: Hotfixed (the town has no tag)', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark', base: 'main' }, issue('In Review')).move, 'Hotfixed'));
 test('B: merged, closes, blueprints or telemetry → main → Shipped (live on merge)', () => {
   for (const repo of ['postmark-town/postmark-blueprints', 'postmark-town/postmark-telemetry']) assert.equal(run('closed', { merged: true, repo, base: 'main' }, issue('In Review')).move, 'Shipped');
 });
@@ -299,7 +301,7 @@ test('STAR-203 control: the other states keep the old note (a Backlog issue is s
 const hotfixNoteFor = (key = 'WLD-51', o = {}) => decide({ event: 'closed', pr: pr({ merged: true, base: 'main', ...o }), issue: issue('In Review', key) }).note;
 const withNotes = (state, notes, key = 'WLD-51') => ({ ...issue(state, key), handlerNotes: notes });
 test('STAR-203: the POS-1081 shape: hotfix merged to main, then its train copy merges: the issue stays, with the note', () => {
-  for (const repo of ['postmark-town/postmark-office', 'postmark-town/postmark-site', 'postmark-town/postmark']) {
+  for (const repo of ['postmark-town/postmark-office', 'postmark-town/postmark-site']) {
     const hot = hotfixNoteFor('WLD-51', { repo, number: 1122, files: ['src/lib/b.ts'] });
     assert.match(hot, /as a hotfix/, repo);
     const r = run('closed', { merged: true, repo, number: 1123, base: 'train/2026-w47' }, withNotes('In Review', [hot]));
@@ -307,6 +309,41 @@ test('STAR-203: the POS-1081 shape: hotfix merged to main, then its train copy m
     assert.match(r.note, /a train copy of a hotfix that's on main; Hotfixed comes at the tag/, repo);
     assert.match(r.note, /stays in In Review/, repo);
   }
+});
+// Truey on 2262779 (blocking): the town has no release tag (its main is live on merge, SHIPPING § 1), so rule 4's hold and
+// "Hotfixed comes at the tag" are office and site only. RULED (2026-11-18): a town hotfix is Hotfixed at the merge.
+const TOWN = 'postmark-town/postmark';
+test('STAR-203: a town hotfix (a closes PR into main from a non-train branch) is Hotfixed at the merge, with the live-on-merge note', () => {
+  for (const state of ['Building', 'In Review']) {
+    const r = run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/pos-1010-hand-self-burn', body: 'closes WLD-51' }, issue(state));
+    assert.equal(r.move, 'Hotfixed', state);
+    assert.match(r.note, /live on merge \(the town has no release tag\)/, state);
+  }
+});
+test('STAR-203: then a town train copy meets an already-Hotfixed issue and leaves it', () => {
+  const r = run('closed', { merged: true, repo: TOWN, base: 'train/2026-w47' }, issue('Hotfixed'));
+  assert.equal(r.move, null); assert.match(r.note, /already Hotfixed/);
+});
+test('STAR-203: a town train copy with no hotfix first is not held (no tag will come to free it)', () => {
+  const hot = hotfixNoteFor('WLD-51', { repo: 'postmark-town/postmark-site', files: ['src/lib/b.ts'] });
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'train/2026-w47' }, withNotes('In Review', [hot])).move, 'On the Train');
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'train/2026-w47' }, issue('In Review')).move, 'On the Train');
+});
+test('STAR-203 control: a town PR into main from a train branch is not a hotfix, and a town hotfix on a done-type or red-zone issue moves nothing', () => {
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'train/2026-w47', body: 'closes WLD-51' }, issue('In Review')).move, null);
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51' }, issue('Hotfixed')).move, null);
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51' }, issue('Gated')).move, null);
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51' }, issue('Backlog')).move, null);
+});
+// Truey finding 3: the hold reads this repo's own hotfix note only
+test("STAR-203: a site hotfix's note does not hold an office train PR for the same issue (the note starts with its own repo and PR)", () => {
+  const siteNote = hotfixNoteFor('WLD-51', { repo: 'postmark-town/postmark-site', number: 900, files: ['src/lib/b.ts'] });
+  assert.match(siteNote, /^postmark-site#900 merged to main as a hotfix/);
+  assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-office', base: 'train/2026-w47' }, withNotes('In Review', [siteNote])).move, 'On the Train');
+  assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'train/2026-w47' }, withNotes('In Review', [siteNote])).move, null);
+  // and "postmark" (the town) never reads a "postmark-office#" note as its own
+  const officeNote = hotfixNoteFor('WLD-51', { number: 7 });
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'train/2026-w47' }, withNotes('In Review', [officeNote])).move, 'On the Train');
 });
 test('STAR-203 control: the same train merge with no hotfix on main moves the issue to On the Train as before', () => {
   assert.equal(run('closed', { merged: true, base: 'train/2026-w47' }, withNotes('In Review', [])).move, 'On the Train');
@@ -402,11 +439,24 @@ test('tag mode: the red zone is never left, and a state no hotfix waits in is a 
   assert.deepEqual(tagOn('Some New State').move, null);
 });
 test('tag mode: a missing issue is nothing', () => assert.deepEqual(decideTag({ tag: 't', pr: hf(), issue: null }), { move: null, note: null }));
-test('tag mode: only office, site and town tags are hotfix tags', () => {
-  assert.equal(isHotfixRepo('postmark-town/postmark-office'), true);
-  assert.equal(isHotfixRepo('postmark-town/postmark-site'), true);
-  assert.equal(isHotfixRepo('postmark-town/postmark'), true);
-  for (const r of ['postmark-town/postmark-world', 'postmark-town/postmark-telemetry', 'postmark-town/postmark-blueprints']) assert.equal(isHotfixRepo(r), false, r);
+test('tag mode: only office and site cut release tags (the town is live on merge and has none)', () => {
+  assert.equal(hasReleaseTags('postmark-town/postmark-office'), true);
+  assert.equal(hasReleaseTags('postmark-town/postmark-site'), true);
+  for (const r of ['postmark-town/postmark', 'postmark-town/postmark-world', 'postmark-town/postmark-telemetry', 'postmark-town/postmark-blueprints']) assert.equal(hasReleaseTags(r), false, r);
+  assert.deepEqual(tagIntents({ tag: 't', prs: [hf({ repo: 'postmark-town/postmark' })] }), []);
+});
+// Truey on 2262779: an `unsure` is "no move" (TRACKING § The rhythm); at the tag it is a note only.
+test('tag mode: an unsure hotfix at the tag is a note only, whatever the state; a closes for the same issue wins', () => {
+  const u = hf({ number: 1124, body: 'unsure · POS-5', headRef: 'pos-5-x' });
+  assert.deepEqual(tagIntents({ tag: 't', prs: [u] }).map((i) => [i.key, i.kind]), [['POS-5', 'unsure']]);
+  for (const s of ['Building', 'In Review', 'On the Train', 'Awaiting Settlement', 'Gated', 'Backlog']) {
+    const r = decideTag({ tag: 'release/2026-w47.18', pr: u, kind: 'unsure', issue: { ...issue(s, 'POS-5') } });
+    assert.equal(r.move, null, s); assert.match(r.note, /release\/2026-w47\.18 is live and contains postmark-office#1124, an unsure hotfix for POS-5/, s);
+  }
+  assert.equal(decideTag({ tag: 't', pr: u, kind: 'unsure', issue: issue('Hotfixed', 'POS-5') }).note, null);
+  const both = [u, hf({ number: 1126, body: 'closes POS-5', headRef: 'pos-5-y' })];
+  assert.deepEqual(tagIntents({ tag: 't', prs: both }).map((i) => [i.key, i.pr.number, i.kind]), [['POS-5', 1126, 'closes']]);
+  assert.deepEqual(tagIntents({ tag: 't', prs: [...both].reverse() }).map((i) => [i.key, i.pr.number, i.kind]), [['POS-5', 1126, 'closes']]);
 });
 test('tag mode: a push event is a release tag only for refs/tags/release/*, and not a deletion', () => {
   assert.equal(tagOf({ ref: 'refs/tags/release/2026-w47.18' }), 'release/2026-w47.18');

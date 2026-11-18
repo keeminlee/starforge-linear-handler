@@ -4,6 +4,7 @@
 # LINEAR_HANDLER_LIVE is 1: the cutover is that one variable, set in the same sitting Linear's own automations go off.
 # A hand-pushed release/* tag (a hotfix's) fires the push trigger: the handler sets the tag's hotfix PRs' issues to
 # Hotfixed (STAR-203). A tag pushed with GITHUB_TOKEN (the weekly ship's own) fires nothing; the ship-week skill sets Shipped.
+# Only office and site cut release tags; the town has none (its main is live on merge), so its caller needs no push trigger.
 name: linear-handler
 on:
   pull_request_target:

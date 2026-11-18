@@ -13,7 +13,7 @@
 // "linear" step fails, which is what the sentinel's probe reads; review-handler #3).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { decide, decideTag, isHotfixRepo, issueKeyOf, pathsOf, previousTag, prNumbersOf, rungOf, tagIntents, tagOf, takesMain } from './handler-core.mjs';
+import { decide, decideTag, hasReleaseTags, issueKeyOf, pathsOf, previousTag, prNumbersOf, rungOf, tagIntents, tagOf, takesMain } from './handler-core.mjs';
 
 const CONFIG = JSON.parse(readFileSync(new URL('./handler-config.json', import.meta.url), 'utf8'));
 
@@ -75,21 +75,24 @@ export async function handle(ev, deps, { dry = false, log = () => {} } = {}) {
  *  when the range can't be read as a hotfix's: no previous tag, or one that is a ship's size (a ship tag has no hotfix
  *  issue to set here, and a hand reads it). */
 export async function tagPrsWith(api, repo, tag, { maxCommits = 250, maxPrs = 100 } = {}) {
-  const names = [];
-  for (let page = 1; page <= 30; page++) {
-    const batch = await api(`/repos/${repo}/git/matching-refs/tags/release/?per_page=100&page=${page}`);
-    names.push(...batch.map((r) => String(r.ref).replace(/^refs\/tags\//, '')));
-    if (batch.length < 100) break;
-  }
+  // matching-refs returns every match in one answer and ignores per_page and page (Truey's live read: the same 168 refs on
+  // every page), so it is read once
+  const names = (await api(`/repos/${repo}/git/matching-refs/tags/release/`)).map((r) => String(r.ref).replace(/^refs\/tags\//, ''));
   const prev = previousTag(tag, names);
   if (!prev) return { prs: [], why: `no previous release tag before ${tag}, so there is no range to read` };
   const cmp = await api(`/repos/${repo}/compare/${encodeURIComponent(prev)}...${encodeURIComponent(tag)}`);
   if (cmp.ahead_by > cmp.commits.length || cmp.commits.length >= maxCommits) return { prs: [], why: `${prev}...${tag} is ${cmp.ahead_by} commits, too many to read as a hotfix; a hand reads it` };
   const numbers = prNumbersOf(cmp.commits);
   if (numbers.length > maxPrs) return { prs: [], why: `${prev}...${tag} names ${numbers.length} PRs, too many to read as a hotfix; a hand reads it` };
-  const prs = [];
-  for (const n of numbers) prs.push(prOf({ action: 'closed', repository: { full_name: repo }, pull_request: await api(`/repos/${repo}/pulls/${n}`) }));
-  return { prs, prev };
+  const prs = [], skipped = [];
+  for (const n of numbers) {
+    let p;
+    try { p = await api(`/repos/${repo}/pulls/${n}`); }
+    // a "(#N)" in a subject that is not a PR of this repo (an issue number, a reference) is skipped, never a failure
+    catch (e) { if (e.status === 404) { skipped.push(`#${n} is named in a commit subject but is not a PR of ${repo} (404); skipped`); continue; } throw e; }
+    prs.push(prOf({ action: 'closed', repository: { full_name: repo }, pull_request: p }));
+  }
+  return { prs, prev, skipped };
 }
 
 /**
@@ -102,17 +105,18 @@ export async function handleTag(ev, deps, { dry = false, log = () => {} } = {}) 
   const tag = tagOf(ev), repo = ev.repository?.full_name ?? '';
   const check = (summary) => ({ ok: true, summary });
   if (!tag) return { did: [], check: check('not a release tag push; nothing for Linear') };
-  if (!isHotfixRepo(repo)) return { did: [], check: check(`${tag}: ${repo} has no hotfix tags; nothing for Linear`) };
-  const { prs, why } = await deps.tagPrs(repo, tag);
+  if (!hasReleaseTags(repo)) return { did: [], check: check(`${tag}: ${repo} has no release tags to read (the town's hotfix is Hotfixed at its merge); nothing for Linear`) };
+  const { prs, why, skipped = [] } = await deps.tagPrs(repo, tag);
+  for (const s of skipped) log(s);
   if (why) { log(why); return { did: [], check: check(`${tag}: ${why}`) }; }
   const intents = tagIntents({ tag, prs });
   let linear = null;
   const client = async () => (linear ??= typeof deps.linear === 'function' ? await deps.linear() : deps.linear);
   const did = [], failed = [];
-  for (const { key, pr } of intents) {
+  for (const { key, pr, kind } of intents) {
     try {
       const issue = await (await client()).issue(key);
-      const r = decideTag({ tag, pr, issue });
+      const r = decideTag({ tag, pr, issue, kind });
       if (issue && r.move) {
         const stateId = await (await client()).stateId(issue.teamId, r.move);
         if (!stateId) throw new Error(`team of ${issue.key} has no state "${r.move}"`);
@@ -127,7 +131,7 @@ export async function handleTag(ev, deps, { dry = false, log = () => {} } = {}) 
   }
   for (const d of did) log(`${dry ? 'would: ' : ''}${d}`);
   if (failed.length) throw new Error(failed.join('; '));
-  return { did, check: check(`${tag}: ${intents.length} hotfix issue(s) read, ${did.length} act(s)`) };
+  return { did, check: check(`${tag}: ${intents.length} hotfix issue(s) read, ${did.length} act(s)${skipped.length ? `; ${skipped.length} skipped` : ''}`) };
 }
 
 // ── the real clients ──
@@ -173,7 +177,7 @@ async function githubApi(path) {
   const api = process.env.GITHUB_API_URL || 'https://api.github.com';
   const headers = { accept: 'application/vnd.github+json', ...(process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) };
   const r = await fetch(`${api}${path}`, { headers, signal: AbortSignal.timeout(30_000) });
-  if (!r.ok) throw new Error(`GitHub ${path.split('?')[0]}: HTTP ${r.status}`);
+  if (!r.ok) throw Object.assign(new Error(`GitHub ${path.split('?')[0]}: HTTP ${r.status}`), { status: r.status });
   return r.json();
 }
 
