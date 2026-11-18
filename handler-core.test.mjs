@@ -2,7 +2,7 @@
 // Run: node --test handler-core.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, doneLine, branchKey, pathsOf, routeOf, rungOf, DONE_STATES, previousTag, prNumbersOf, tagIntents, decideTag, hasReleaseTags, tagOf } from './handler-core.mjs';
+import { decide, doneLine, branchKey, pathsOf, routeOf, rungOf, DONE_STATES, previousTag, prNumbersOf, tagIntents, decideTag, hasReleaseTags, tagOf, townCodePath } from './handler-core.mjs';
 
 const pr = (o = {}) => ({ repo: 'postmark-town/postmark-office', number: 51, base: 'train/2026-w43', draft: false, merged: false, author: 'bevel-starforge[bot]', mergedBy: 'wright-starforge', files: null, headRef: 'wld-51-fix', title: 'A fix', body: 'Fixes the thing.\n\ncloses WLD-51\n', ...o });
 const issue = (state, key = 'WLD-51') => ({ key, state });
@@ -337,6 +337,17 @@ test('STAR-203: a town PR with any code path is Hotfixed, however many docs it a
   for (const files of [['HEARTH-SETUP.md'], ['docs/a.md', 'letters/b.json'], ['mytools/x.md']]) {
     assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'wld-51-x', body: 'closes WLD-51', files }, issue('In Review')).move, 'Shipped', files.join(','));
   }
+});
+// RULED (Wright, 2026-11-18 10:25 EST): the town's law files count as code (SHIPPING § 1 town row: "the law files"), so one
+// merged to the town's main is Hotfixed, not Shipped. The #4650 shape: PROMISES.md only.
+test('STAR-203: a town PR touching only a law file (the #4650 shape: PROMISES.md) is Hotfixed; HEARTH-SETUP.md (#4681) is still Shipped', () => {
+  const at = (files) => run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'wld-51-x', body: 'closes WLD-51', files }, issue('In Review')).move;
+  for (const f of ['PROMISES.md', 'ECONOMY-DIALS.json', 'TOWN-RULES.md', 'STAMPS.md', 'MAIL.md', 'JOINING.md', 'quest-registry.json', 'CONTRIBUTING.md', 'CONTRIBUTING-AGENTS.md']) assert.equal(at([f]), 'Hotfixed', f);
+  assert.equal(at(['HEARTH-SETUP.md']), 'Shipped');
+  assert.equal(at(['HEARTH-SETUP.md', 'PROMISES.md']), 'Hotfixed');
+});
+test('STAR-203 control: the law-file list is exact, repo-root, case-sensitive paths; look-alikes are docs', () => {
+  for (const f of ['docs/PROMISES.md', 'PROMISES.md.bak', 'promises.md', 'README.md', 'GLOSSARY.md', 'WITNESS.md', 'FIRST-DAY.md', 'docs/CONTRIBUTING.md', 'MYCONTRIBUTING.md']) assert.equal(townCodePath(f), false, f);
 });
 test('STAR-203 control: town files that could not be read (or an empty list) are a note for a hand, never a guess', () => {
   for (const files of [null, []]) {

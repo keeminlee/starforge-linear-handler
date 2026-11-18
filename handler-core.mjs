@@ -126,9 +126,13 @@ const hotfixOnMain = (issue, key, repo) => hasReleaseTags(repo)
   && (issue.handlerNotes ?? []).some((n) => new RegExp(`^${repoName(repo).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#\\d+ merged to (?:main|master) as a hotfix and closes ${key};`).test(n));
 // The town has no release tag: its main is live on merge (SHIPPING § 1), so a town hotfix is Hotfixed at the merge.
 const isTown = (repo) => repoName(repo) === 'postmark';
-/** Town code (SHIPPING § 1 town row: tools/, the ferry, the mint, the witness, the law files): anything under `tools/` or any
- *  .mjs/.js file. A PR touching none of these is docs. */
-export const townCodePath = (f) => /^tools\//.test(String(f)) || /\.(?:mjs|js)$/.test(String(f));
+/** The town's law files, which count as code (Wright, 2026-11-18 10:25 EST: SHIPPING § 1's town row lists "the law files" with
+ *  code; that row is the canonical list): repo-root paths as the API's file list names them. Each exists in
+ *  postmark-town/postmark at main (checked 2026-11-18); CONTRIBUTING*.md is a pattern. */
+export const TOWN_LAW_FILES = new Set(['TOWN-RULES.md', 'STAMPS.md', 'MAIL.md', 'JOINING.md', 'PROMISES.md', 'ECONOMY-DIALS.json', 'quest-registry.json']);
+/** Town code (SHIPPING § 1 town row: tools/, the ferry, the mint, the witness, the law files): anything under `tools/`, any
+ *  .mjs/.js file, or a law file (TOWN_LAW_FILES, and the root CONTRIBUTING*.md rules). A PR touching none of these is docs. */
+export const townCodePath = (f) => /^tools\//.test(String(f)) || /\.(?:mjs|js)$/.test(String(f)) || TOWN_LAW_FILES.has(String(f)) || /^CONTRIBUTING[^/]*\.md$/.test(String(f));
 const isMainBase = (base) => base === 'main' || base === 'master';
 
 export function decide({ event, pr, issue }) {
