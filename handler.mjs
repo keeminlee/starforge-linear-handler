@@ -13,7 +13,7 @@
 // "linear" step fails, which is what the sentinel's probe reads; review-handler #3).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { decide, issueKeyOf, pathsOf, rungOf } from './handler-core.mjs';
+import { decide, decideTag, hasReleaseTags, issueKeyOf, pathsOf, previousTag, prNumbersOf, rungOf, tagIntents, tagOf, takesMain } from './handler-core.mjs';
 
 const CONFIG = JSON.parse(readFileSync(new URL('./handler-config.json', import.meta.url), 'utf8'));
 
@@ -25,13 +25,15 @@ export function prOf(ev) {
   const ours = !!repo && p.head?.repo?.full_name === repo;
   return {
     repo, number: p.number, base: p.base?.ref, headRef: p.head?.ref, draft: !!p.draft, merged: !!p.merged,
-    body: p.body ?? '', author: ours ? p.user?.login : null, mergedBy: p.merged_by?.login ?? null,
+    title: p.title ?? '', body: p.body ?? '', author: ours ? p.user?.login : null, mergedBy: p.merged_by?.login ?? null,
   };
 }
 
 /** Whether a merge needs its changed files read: a site PR into main, by our author, merged by one of ours. */
 const needsFiles = (event, pr) => event === 'closed' && pr.merged && rungOf(pr.author) && rungOf(pr.mergedBy)
-  && /(^|\/)postmark-site$/.test(pr.repo) && (pr.base === 'main' || pr.base === 'master');
+  && (pr.base === 'main' || pr.base === 'master')
+  // a site PR into main, or a town PR into main that isn't the train's (the town's state follows what merged, STAR-203)
+  && (/(^|\/)postmark-site$/.test(pr.repo) || (/(^|\/)postmark$/.test(pr.repo) && !/^train\//.test(String(pr.headRef))));
 
 /**
  * One event, end to end. deps.linear is a Linear client, or a function that makes one: it is made only when an
@@ -43,7 +45,7 @@ export async function handle(ev, deps, { dry = false, log = () => {} } = {}) {
   const pr = prOf(ev);
   const event = ev.action;
   if (needsFiles(event, pr)) pr.files = deps.files ? await deps.files(pr.repo, pr.number).catch(() => null) : null;
-  const key = rungOf(pr.author) ? issueKeyOf(pr) : null;
+  const key = rungOf(pr.author) && !takesMain(pr) ? issueKeyOf(pr) : null;
   let linear = null;
   const client = async () => (linear ??= typeof deps.linear === 'function' ? await deps.linear() : deps.linear);
   const issue = key ? await (await client()).issue(key) : null;
@@ -68,6 +70,70 @@ export async function handle(ev, deps, { dry = false, log = () => {} } = {}) {
   }
   for (const d of did) log(`${dry ? 'would: ' : ''}${d}`);
   return { ...r, did };
+}
+
+/** The PRs a release tag contains, from a GitHub reader (api(path) -> parsed JSON): the commits between the previous
+ *  release tag and this one name them (PR numbers in their subjects), and each is read whole. { prs } or { prs: [], why }
+ *  when the range can't be read as a hotfix's: no previous tag, or one that is a ship's size (a ship tag has no hotfix
+ *  issue to set here, and a hand reads it). */
+export async function tagPrsWith(api, repo, tag, { maxCommits = 250, maxPrs = 100 } = {}) {
+  // matching-refs returns every match in one answer and ignores per_page and page (Truey's live read: the same 168 refs on
+  // every page), so it is read once
+  const names = (await api(`/repos/${repo}/git/matching-refs/tags/release/`)).map((r) => String(r.ref).replace(/^refs\/tags\//, ''));
+  const prev = previousTag(tag, names);
+  if (!prev) return { prs: [], why: `no previous release tag before ${tag}, so there is no range to read` };
+  const cmp = await api(`/repos/${repo}/compare/${encodeURIComponent(prev)}...${encodeURIComponent(tag)}`);
+  if (cmp.ahead_by > cmp.commits.length || cmp.commits.length >= maxCommits) return { prs: [], why: `${prev}...${tag} is ${cmp.ahead_by} commits, too many to read as a hotfix; a hand reads it` };
+  const numbers = prNumbersOf(cmp.commits);
+  if (numbers.length > maxPrs) return { prs: [], why: `${prev}...${tag} names ${numbers.length} PRs, too many to read as a hotfix; a hand reads it` };
+  const prs = [], skipped = [];
+  for (const n of numbers) {
+    let p;
+    try { p = await api(`/repos/${repo}/pulls/${n}`); }
+    // a "(#N)" in a subject that is not a PR of this repo (an issue number, a reference) is skipped, never a failure
+    catch (e) { if (e.status === 404) { skipped.push(`#${n} is named in a commit subject but is not a PR of ${repo} (404); skipped`); continue; } throw e; }
+    prs.push(prOf({ action: 'closed', repository: { full_name: repo }, pull_request: p }));
+  }
+  return { prs, prev, skipped };
+}
+
+/**
+ * A release tag pushed by hand (the caller's `on: push: tags: release/*`): every issue its hotfix PRs closed goes to
+ * Hotfixed, with a note naming the tag (STAR-203). deps.linear as in handle; deps.tagPrs(repo, tag) -> { prs, why? }.
+ * One failure (a team without the state) doesn't stop the others: it is thrown after the rest are done, so the
+ * "linear" step still fails and says so.
+ */
+export async function handleTag(ev, deps, { dry = false, log = () => {} } = {}) {
+  const tag = tagOf(ev), repo = ev.repository?.full_name ?? '';
+  const check = (summary) => ({ ok: true, summary });
+  if (!tag) return { did: [], check: check('not a release tag push; nothing for Linear') };
+  if (!hasReleaseTags(repo)) return { did: [], check: check(`${tag}: ${repo} has no release tags to read (the town's hotfix is Hotfixed at its merge); nothing for Linear`) };
+  const { prs, why, skipped = [] } = await deps.tagPrs(repo, tag);
+  for (const s of skipped) log(s);
+  if (why) { log(why); return { did: [], check: check(`${tag}: ${why}`) }; }
+  const intents = tagIntents({ tag, prs });
+  let linear = null;
+  const client = async () => (linear ??= typeof deps.linear === 'function' ? await deps.linear() : deps.linear);
+  const did = [], failed = [];
+  for (const { key, pr, kind } of intents) {
+    try {
+      const issue = await (await client()).issue(key);
+      const r = decideTag({ tag, pr, issue, kind });
+      if (issue && r.move) {
+        const stateId = await (await client()).stateId(issue.teamId, r.move);
+        if (!stateId) throw new Error(`team of ${issue.key} has no state "${r.move}"`);
+        if (!dry) await (await client()).setState(issue.id, stateId);
+        did.push(`${issue.key}: ${issue.state} → ${r.move}`);
+      }
+      if (issue && r.note) {
+        if ((issue.handlerNotes ?? []).includes(r.note)) did.push(`${issue.key}: note already there`);
+        else { if (!dry) await (await client()).comment(issue.id, r.note); did.push(`${issue.key}: note "${r.note}"`); }
+      }
+    } catch (e) { failed.push(`${key}: ${e.message}`); }
+  }
+  for (const d of did) log(`${dry ? 'would: ' : ''}${d}`);
+  if (failed.length) throw new Error(failed.join('; '));
+  return { did, check: check(`${tag}: ${intents.length} hotfix issue(s) read, ${did.length} act(s)${skipped.length ? `; ${skipped.length} skipped` : ''}`) };
 }
 
 // ── the real clients ──
@@ -108,6 +174,15 @@ async function linearClient(env) {
   };
 }
 
+/** One GitHub API read (the job's own token; a public repo needs no more). */
+async function githubApi(path) {
+  const api = process.env.GITHUB_API_URL || 'https://api.github.com';
+  const headers = { accept: 'application/vnd.github+json', ...(process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) };
+  const r = await fetch(`${api}${path}`, { headers, signal: AbortSignal.timeout(30_000) });
+  if (!r.ok) throw Object.assign(new Error(`GitHub ${path.split('?')[0]}: HTTP ${r.status}`), { status: r.status });
+  return r.json();
+}
+
 /** A PR's changed paths, from the GitHub API (the job's own token; a public repo needs no more). Up to 3,000 files. */
 async function prFiles(repo, number) {
   const api = process.env.GITHUB_API_URL || 'https://api.github.com';
@@ -135,7 +210,8 @@ if (isMain) {
     let r;
     try {
       const linear = dry && !process.env.LINEAR_APP ? () => stubFromNothing() : () => linearClient(process.env);
-      r = await handle(ev, { linear, files: prFiles }, { dry, log });
+      r = tagOf(ev) ? await handleTag(ev, { linear, tagPrs: (repo, tag) => tagPrsWith(githubApi, repo, tag) }, { dry, log })
+        : await handle(ev, { linear, files: prFiles }, { dry, log });
     } catch (e) {
       console.error(`handler: ${e.message}`);
       summary([`**the handler failed to act** (${dry ? 'dry' : 'live'}): ${e.message}`, ...lines.map((l) => `- ${l}`)]);

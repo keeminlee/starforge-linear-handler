@@ -108,16 +108,43 @@ const label = (pr) => `${String(pr.repo).replace(/^postmark-town\//, '')}#${pr.n
 const forward = (from, to) => Object.hasOwn(RANK, from) && (RANK[to] ?? -1) > RANK[from];
 // a merge's "closes" moves an issue only from the states a lane is in (review-handler #2)
 const LANE_STATES = new Set(['Building', 'In Review']);
+// done-type states (TRACKING § The states: Shipped is a kind of Done, Hotfixed is Done by hotfix): the handler never
+// moves an issue out of one (STAR-203)
+export const DONE_STATES = new Set(['Hotfixed', 'Shipped', 'Done']);
+
+/** The takes-main PR carries no issue by design (STAR-203, ruled 2026-11-18): its head branch starts `take-main/`, or its
+ *  title is `train/<week> takes main at <sha>`. The check passes it and the handler moves nothing for it. */
+export const takesMain = (pr) => /^take-main\//i.test(String(pr.headRef ?? '')) || /^train\/\S+ takes main at \S+$/i.test(String(pr.title ?? '').trim());
+
+// The handler's own note for a merge into main that is a hotfix (office, site, town). It is also how a later train copy
+// of the same issue knows a hotfix is already on main (STAR-203 rule 2), so the words live in one place.
+const hotfixNote = (pr, key) => `${label(pr)} merged to ${pr.base} as a hotfix and closes ${key}; Hotfixed is set at its tag, by the handler (SHIPPING § 5). The state holds.`;
+// Only for the repos with release tags (office, site), and only this repo's own note: a site hotfix note must not hold an
+// office train PR (Truey, STAR-203). The note starts with `label(pr)`, so the match is anchored on `<repo>#<n>`.
+const repoName = (repo) => String(repo).replace(/^postmark-town\//, '');
+const hotfixOnMain = (issue, key, repo) => hasReleaseTags(repo)
+  && (issue.handlerNotes ?? []).some((n) => new RegExp(`^${repoName(repo).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#\\d+ merged to (?:main|master) as a hotfix and closes ${key};`).test(n));
+// The town has no release tag: its main is live on merge (SHIPPING § 1), so a town hotfix is Hotfixed at the merge.
+const isTown = (repo) => repoName(repo) === 'postmark';
+/** Town code (SHIPPING § 1 town row: tools/, the ferry, the mint, the witness, the law files): anything under `tools/` or any
+ *  .mjs/.js file. A PR touching none of these is docs. */
+export const townCodePath = (f) => /^tools\//.test(String(f)) || /\.(?:mjs|js)$/.test(String(f));
+const isMainBase = (base) => base === 'main' || base === 'master';
 
 export function decide({ event, pr, issue }) {
   const none = (check = { ok: true, summary: 'nothing for Linear' }) => ({ move: null, note: null, ladder: null, check });
+  if (takesMain(pr)) return none({ ok: true, summary: 'a takes-main PR (a train takes main) carries no issue by design; Linear untouched' });
   const d = doneLine(pr.body);
   const bk = branchKey(pr.headRef);
   // the done line and the branch must name the same issue (house rule 7 names the branch with it; review-handler #2)
   const mismatch = !d.error && bk && bk !== d.key ? `the done line names ${d.key} but the branch names ${bk}` : null;
   const isReadyEvent = (event === 'opened' && !pr.draft) || event === 'ready_for_review' || (event === 'edited' && !pr.draft);
+  // STAR-203 (TRACKING § A PR's done line): "a lane writes no `part N of M`"; a ready PR with one fails its check
+  const partRefused = !d.error && d.kind === 'part' && isReadyEvent;
   const check = mismatch
     ? { ok: false, summary: `done line: ${mismatch}; fix one of them` }
+    : partRefused
+      ? { ok: false, summary: `done line: "part ${d.n} of ${d.m} · ${d.key}" is refused: one piece, one sub-issue, \`closes\` (TRACKING § A PR's done line). Fix: split it into a sub-issue and say \`closes <ID>\` (the sub-issue's id) on one line` }
     : d.error
       ? (isReadyEvent ? { ok: false, summary: `done line: ${d.error}. Add one line: "closes WLD-51" or "unsure · WLD-51" (an issue in several pieces gets a sub-issue per piece; a lane writes no "part N of M")` } : { ok: true, summary: `done line: ${d.error} (needed when the PR is ready)` })
       : { ok: true, summary: `done line: ${d.kind === 'part' ? `part ${d.n} of ${d.m}` : d.kind} · ${d.key}` };
@@ -175,15 +202,115 @@ export function decide({ event, pr, issue }) {
   if (kind === 'unsure') {
     return { move: null, ladder: rungOf(pr.author), check, note: `Unsure (${label(pr)} merged): does it finish ${key}? ${d.error ? `The PR had ${d.error}. ` : ''}Asking up the ladder; the state holds until someone is sure.` };
   }
+  if (DONE_STATES.has(issue.state)) {
+    // a done state is never moved back (STAR-203): a hotfix's train copy merging after its tag lands here, and there is nothing to set by hand
+    return { move: null, ladder: null, check, note: `${label(pr)} merged into ${pr.base} and closes ${key}, but ${key} is already ${issue.state}; the handler never moves a done state back, so it stays (a train copy of a hotfix lands here).` };
+  }
   if (!LANE_STATES.has(issue.state)) {
     return { move: null, ladder: null, check, note: `${label(pr)} merged and closes ${key}, but ${key} is in ${issue.state}, not Building or In Review, so the merge moved nothing; set it by hand.` };
   }
+  // the town's hotfix (a `closes` PR into main from a branch that isn't the train) is live on merge: Hotfixed now (STAR-203)
+  // and the state follows what merged (ruled 2026-11-18): code is Hotfixed, a docs-only PR is Shipped (TRACKING: a
+  // live-on-merge docs PR is Shipped); files the handler couldn't read are a hand's
+  if (isTown(pr.repo) && isMainBase(pr.base) && !/^train\//.test(String(pr.headRef))) {
+    if (!Array.isArray(pr.files) || !pr.files.length) {
+      return { move: null, ladder: null, check, note: `${label(pr)} merged to ${pr.base} and closes ${key}, but its changed files could not be read, so whether it is town code (Hotfixed) or docs (Shipped) is unknown; set the state by hand.` };
+    }
+    if (pr.files.some(townCodePath)) {
+      return { move: forward(issue.state, 'Hotfixed') ? 'Hotfixed' : null, note: `${label(pr)} merged to ${pr.base} as a hotfix and closes ${key}: live on merge (the town has no release tag), so ${key} is Hotfixed.`, ladder: null, check };
+    }
+    return { move: forward(issue.state, 'Shipped') ? 'Shipped' : null, note: `${label(pr)} merged to ${pr.base} and closes ${key}: live on merge (docs; TRACKING: a live-on-merge docs PR is Shipped), so ${key} is Shipped.`, ladder: null, check };
+  }
   const r = routeOf(pr.repo, pr.base, pr.files ?? null);
+  // a train copy of a hotfix that is already on main (STAR-203 rule 2): the issue waits for its tag, it doesn't ride the train
+  if (r.to === 'On the Train' && hotfixOnMain(issue, key, pr.repo)) {
+    return { move: null, ladder: null, check, note: `${label(pr)} merged into ${pr.base} and closes ${key}: a train copy of a hotfix that's on main; Hotfixed comes at the tag. ${key} stays in ${issue.state}.` };
+  }
   if (r.to) return { move: forward(issue.state, r.to) ? r.to : null, note: null, ladder: null, check };
   const why = {
-    hotfix: `${label(pr)} merged to ${pr.base} as a hotfix and closes ${key}; Hotfixed is set at its tag by whoever cuts it (SHIPPING § 5). The state holds.`,
+    hotfix: hotfixNote(pr, key),
     'files-unread': `${label(pr)} merged to ${pr.base} and closes ${key}, but its changed files could not be read, so whether it is live on merge is unknown; set the state by hand.`,
     unrouted: `${label(pr)} merged into ${pr.base} and closes ${key}, but no route is ruled for that repo and base; set the state by hand.`,
   }[r.why];
   return { move: null, ladder: null, check, note: why };
+}
+
+// ── Hotfixed at the tag (STAR-203; ruled 2026-11-18 for Darko's STAR-197 go) ──
+// A hand-pushed `release/*` tag fires the caller's `on: push: tags` trigger. The handler lists the PRs merged into main
+// between the previous release tag and this one (the commit subjects name them), and moves each one's issue to Hotfixed.
+
+/** Release tags are cut for the repos that deploy from a tag: office and site (SHIPPING § 5). The town has none (its main is
+ *  live on merge), and Hotfixed is set at the merge there. */
+export const hasReleaseTags = (repo) => ['postmark-office', 'postmark-site'].includes(repoName(repo));
+
+/** The release tag a push event made ("release/2026-w47.18"), or null: not a release tag, a deletion, or a PR event. */
+export function tagOf(ev) {
+  if (ev?.pull_request || ev?.deleted || typeof ev?.ref !== 'string' || !ev.ref.startsWith('refs/tags/release/')) return null;
+  return ev.ref.slice('refs/tags/'.length);
+}
+
+// release/2026-wNN or release/2026-wNN.k: the week, then the patch number (a bare week sorts before .1)
+const tagKey = (t) => { const m = /^release\/(\d{4})-w(\d{1,2})(?:\.(\d+))?$/.exec(String(t)); return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : null; };
+const tagLess = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
+/** The newest release tag before `tag` in names (week, then patch), or null. Names that aren't release tags are ignored. */
+export function previousTag(tag, names) {
+  const me = tagKey(tag);
+  if (!me) return null;
+  let best = null, bestKey = null;
+  for (const n of new Set(names)) {
+    const k = tagKey(n);
+    if (k && tagLess(k, me) && (!bestKey || tagLess(bestKey, k))) { best = n; bestKey = k; }
+  }
+  return best;
+}
+
+/** The PR numbers a commit range names, once each, in order: a squash subject ends "(#N)", a merge commit's starts
+ *  "Merge pull request #N". commits are GitHub's compare entries ({ commit: { message } }). */
+export function prNumbersOf(commits) {
+  const out = [];
+  for (const c of commits) {
+    const subject = String(c?.commit?.message ?? '').split(/\r?\n/)[0];
+    const m = /^Merge pull request #(\d+)\b/.exec(subject) ?? /\(#(\d+)\)\s*$/.exec(subject);
+    if (m && !out.includes(Number(m[1]))) out.push(Number(m[1]));
+  }
+  return out;
+}
+
+/**
+ * The issues a tag's PRs name: PRs that merged into main in a hotfix repo, by one of ours (author and merger), from a
+ * branch that is not a train or a takes-main, and whose done line is `closes`, `unsure` or the last part. A missing done
+ * line is never guessed. One intent per issue: { key, pr, kind } (kind 'closes', or 'unsure': a note only).
+ */
+export function tagIntents({ prs }) {
+  const seen = new Map();
+  for (const pr of prs) {
+    if (!pr.merged || !isMainBase(pr.base) || !hasReleaseTags(pr.repo)) continue;
+    if (/^train\//.test(String(pr.headRef)) || takesMain(pr)) continue;
+    if (!rungOf(pr.author) || !rungOf(pr.mergedBy)) continue;
+    const d = doneLine(pr.body);
+    if (d.error || (d.kind === 'part' && d.n !== d.m)) continue;
+    const bk = branchKey(pr.headRef);
+    if (bk && bk !== d.key) continue;
+    // a `closes` (or the last part) finishes the issue; an `unsure` doesn't say so, so the tag only notes it
+    const kind = d.kind === 'unsure' ? 'unsure' : 'closes';
+    const had = seen.get(d.key);
+    if (!had || (had.kind === 'unsure' && kind === 'closes')) seen.set(d.key, { key: d.key, pr, kind });
+  }
+  return [...seen.values()];
+}
+
+// the states a hotfix waits in until its tag; anything else is a hand's (a note says so)
+const HOTFIX_FROM = new Set(['Building', 'In Review', 'On the Train', 'Awaiting Settlement']);
+
+/** What a live tag does to one issue its PR named: { move, note }. */
+export function decideTag({ tag, pr, issue, kind = 'closes' }) {
+  if (!issue) return { move: null, note: null };
+  const key = issue.key, s = issue.state;
+  if (DONE_STATES.has(s) || s === 'Canceled' || s === 'Duplicate') return { move: null, note: null };
+  // an unsure says nothing about finishing (TRACKING: "unsure: no move"): a note only, whatever the state
+  if (kind === 'unsure') return { move: null, note: `${tag} is live and contains ${label(pr)}, an unsure hotfix for ${key} (it did not say it finishes it): ${key} stays in ${s}; Hotfixed if it finishes it.` };
+  const what = `${tag} is live and contains ${label(pr)}, a hotfix that closes ${key}`;
+  if (RED_ZONE.has(s)) return { move: null, note: `${what}, but ${key} stays in ${s} (red zone: only a hand moves it out). Hotfixed is what it should read.` };
+  if (HOTFIX_FROM.has(s)) return { move: 'Hotfixed', note: `${what}: ${key} is Hotfixed.` };
+  return { move: null, note: `${what}, but ${key} is in ${s}, not Building, In Review, On the Train or Awaiting Settlement, so nothing moved; set it by hand.` };
 }
