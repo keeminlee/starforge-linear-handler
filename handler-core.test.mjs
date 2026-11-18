@@ -246,6 +246,51 @@ test('#3: a part merge moves Queued or In Review to Building, never Backlog or R
     assert.equal(run('closed', { merged: true, body: 'part 1 of 2 · WLD-51' }, issue(s)).move, to, s);
   }
 });
+// ── STAR-203 (STAR-197 piece 2; Darko 2026-11-18 09:16 EST: "Go on all three") ──
+// LAW (TRACKING § A PR's done line): "a lane writes no `part N of M` (Darko, 2026-11-05). An issue that is really several
+// pieces gets a sub-issue per piece." The `linear` check refuses it; closes and unsure work as before.
+test('STAR-203: a ready PR with "part N of M" fails its check, naming the rule and the fix', () => {
+  for (const e of ['opened', 'ready_for_review', 'edited']) {
+    for (const body of ['part 2 of 3 · WLD-51', 'part 1 of 2 · WLD-51', 'part 3 of 3 · WLD-51']) {
+      const r = run(e, { body }, issue('Building'));
+      assert.equal(r.check.ok, false, `${e} · ${body}`);
+      assert.match(r.check.summary, /one piece, one sub-issue/, `${e} · ${body}`);
+      assert.match(r.check.summary, /split it into a sub-issue and say `closes <ID>`/, `${e} · ${body}`);
+    }
+  }
+});
+test('STAR-203: the refusal does not need the issue to be found, nor a Linear read (WLD-97 sat stuck behind a part line)', () => {
+  assert.equal(run('ready_for_review', { body: 'part 2 of 3 · WLD-51' }, null).check.ok, false);
+});
+test('STAR-203 control: closes and unsure still pass the check on a ready PR', () => {
+  for (const body of ['closes WLD-51', 'unsure · WLD-51']) assert.equal(run('ready_for_review', { body }, issue('Building')).check.ok, true, body);
+});
+test('STAR-203 control: a draft with "part N of M" is not failed yet (a draft needs its line only when ready)', () => {
+  assert.equal(run('opened', { draft: true, body: 'part 1 of 2 · WLD-51' }, issue('Queued')).check.ok, true);
+});
+// Done-type states (TRACKING § The states: Shipped and Hotfixed are kinds of Done): nothing the handler does moves an
+// issue out of one. The invariant already held (the red zone, LANE_STATES and forward() each stop it); this pins it.
+const DONE_TYPES = ['Hotfixed', 'Shipped', 'Done'];
+test('STAR-203 control: no event, done line or repo moves an issue out of a done-type state', () => {
+  const events = [['opened', { draft: true }], ['opened', {}], ['ready_for_review', {}], ['converted_to_draft', { draft: true }], ['edited', {}], ['closed', { merged: true }], ['closed', { merged: true, base: 'main' }], ['closed', { merged: true, repo: 'postmark-town/postmark-world', base: 'main' }], ['closed', { merged: true, repo: 'postmark-town/postmark-telemetry', base: 'main' }]];
+  for (const s of DONE_TYPES) for (const [e, p] of events) for (const body of ['closes WLD-51', 'part 1 of 2 · WLD-51', 'part 2 of 2 · WLD-51', 'unsure · WLD-51', 'no line']) {
+    assert.equal(run(e, { ...p, body }, issue(s)).move, null, `${s} · ${e} · ${body}`);
+  }
+});
+test('STAR-203: a train copy merging for an issue already Hotfixed/Shipped/Done leaves it, and the note says so (no "set it by hand")', () => {
+  for (const s of DONE_TYPES) {
+    const r = run('closed', { merged: true, base: 'train/2026-w47', body: 'closes WLD-51' }, issue(s));
+    assert.equal(r.move, null, s);
+    assert.match(r.note, new RegExp(`already ${s}`), s);
+    assert.match(r.note, /never moves a done state back/, s);
+    assert.match(r.note, /train copy/, s);
+    assert.doesNotMatch(r.note, /set it by hand/, s);
+  }
+});
+test('STAR-203 control: the other states keep the old note (a Backlog issue is still set by hand)', () => {
+  assert.match(run('closed', { merged: true }, issue('Backlog')).note, /is in Backlog, not Building or In Review, so the merge moved nothing; set it by hand/);
+});
+
 test('#4: a done line inside an HTML comment is not a done line', () => {
   assert.equal(doneLine('<!-- closes WLD-51 -->').error, 'no done line');
   // an unclosed comment hides everything after it from a reader, so the handler doesn't read it either

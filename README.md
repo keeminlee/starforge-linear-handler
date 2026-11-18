@@ -7,8 +7,9 @@ postmark-telemetry `docs/canon/`). Every PR event in postmark-town's repos runs 
 - **The red zone** (Gated, Needs a Sitting, Darko's Call): a PR event there moves nothing and leaves one note. Needs a
   Sitting and Darko's Call are left only by a hand; Gated is left by whoever put it there, or the lifter its Gate line names, once the gate is met
   (`linear-plan move`, with the evidence; STAR-152, Darko 2026-11-09), and its note says so.
-- **The done line** is one required line in the PR body: `closes WLD-51`, `part 1 of 2 · WLD-51` or
-  `unsure · WLD-51`. A ready PR without one fails this check.
+- **The done line** is one required line in the PR body: `closes WLD-51` or `unsure · WLD-51`. A ready PR without one
+  fails this check, and so does a ready PR with `part N of M · WLD-51`: one piece, one sub-issue, `closes` (TRACKING;
+  STAR-203). Split it into a sub-issue and say `closes <ID>`.
 - **The moves:** a draft PR opens to Building. A ready PR (opened or marked ready) moves its issue to In Review only
   when it finishes it: a `closes` line or the last part (`part M of M`); an earlier part, unsure or no line leaves the
   state where it is. A merge goes by its done line: closes is routed by repo and base; a part stays Building; unsure (or no line) holds the state, leaves a note, and delegates
@@ -52,6 +53,9 @@ which is the PR author's to fix and never an alarm.
   is untouched and the state is set by hand. None of our repos uses a merge queue today. If one starts to, add the
   queue's bot to `AUTHORS` deliberately.
 - **A part merge** (`part N of M`, N < M) moves Queued or In Review back to Building. It never moves Backlog or Ready,
-  which no lane had started.
+  which no lane had started. The check refuses a ready PR that carries one (above), so this is the old behaviour for a
+  PR that got through anyway.
+- **A done state is never moved back** (Hotfixed, Shipped, Done; STAR-203). A hotfix's train copy merging after the tag
+  leaves the issue where it is, with one note saying so.
 - **An HTML comment is never a done line:** only a visible line counts.
 - **A renamed file counts under both its names,** so code moved into a site live-on-merge path still reads as a hotfix.

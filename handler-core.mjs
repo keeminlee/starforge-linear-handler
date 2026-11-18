@@ -108,6 +108,9 @@ const label = (pr) => `${String(pr.repo).replace(/^postmark-town\//, '')}#${pr.n
 const forward = (from, to) => Object.hasOwn(RANK, from) && (RANK[to] ?? -1) > RANK[from];
 // a merge's "closes" moves an issue only from the states a lane is in (review-handler #2)
 const LANE_STATES = new Set(['Building', 'In Review']);
+// done-type states (TRACKING § The states: Shipped is a kind of Done, Hotfixed is Done by hotfix): the handler never
+// moves an issue out of one (STAR-203)
+export const DONE_STATES = new Set(['Hotfixed', 'Shipped', 'Done']);
 
 export function decide({ event, pr, issue }) {
   const none = (check = { ok: true, summary: 'nothing for Linear' }) => ({ move: null, note: null, ladder: null, check });
@@ -116,8 +119,12 @@ export function decide({ event, pr, issue }) {
   // the done line and the branch must name the same issue (house rule 7 names the branch with it; review-handler #2)
   const mismatch = !d.error && bk && bk !== d.key ? `the done line names ${d.key} but the branch names ${bk}` : null;
   const isReadyEvent = (event === 'opened' && !pr.draft) || event === 'ready_for_review' || (event === 'edited' && !pr.draft);
+  // STAR-203 (TRACKING § A PR's done line): "a lane writes no `part N of M`"; a ready PR with one fails its check
+  const partRefused = !d.error && d.kind === 'part' && isReadyEvent;
   const check = mismatch
     ? { ok: false, summary: `done line: ${mismatch}; fix one of them` }
+    : partRefused
+      ? { ok: false, summary: `done line: "part ${d.n} of ${d.m} · ${d.key}" is refused: one piece, one sub-issue, \`closes\` (TRACKING § A PR's done line). Fix: split it into a sub-issue and say \`closes <ID>\` (the sub-issue's id) on one line` }
     : d.error
       ? (isReadyEvent ? { ok: false, summary: `done line: ${d.error}. Add one line: "closes WLD-51" or "unsure · WLD-51" (an issue in several pieces gets a sub-issue per piece; a lane writes no "part N of M")` } : { ok: true, summary: `done line: ${d.error} (needed when the PR is ready)` })
       : { ok: true, summary: `done line: ${d.kind === 'part' ? `part ${d.n} of ${d.m}` : d.kind} · ${d.key}` };
@@ -174,6 +181,10 @@ export function decide({ event, pr, issue }) {
   }
   if (kind === 'unsure') {
     return { move: null, ladder: rungOf(pr.author), check, note: `Unsure (${label(pr)} merged): does it finish ${key}? ${d.error ? `The PR had ${d.error}. ` : ''}Asking up the ladder; the state holds until someone is sure.` };
+  }
+  if (DONE_STATES.has(issue.state)) {
+    // a done state is never moved back (STAR-203): a hotfix's train copy merging after its tag lands here, and there is nothing to set by hand
+    return { move: null, ladder: null, check, note: `${label(pr)} merged into ${pr.base} and closes ${key}, but ${key} is already ${issue.state}; the handler never moves a done state back, so it stays (a train copy of a hotfix lands here).` };
   }
   if (!LANE_STATES.has(issue.state)) {
     return { move: null, ladder: null, check, note: `${label(pr)} merged and closes ${key}, but ${key} is in ${issue.state}, not Building or In Review, so the merge moved nothing; set it by hand.` };
