@@ -149,7 +149,7 @@ test('B: merged, closes, office → main → a hotfix: no move; Hotfixed is set 
 test('B: merged, closes, town → train → On the Train', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark' }, issue('In Review')).move, 'On the Train'));
 // until 2026-11-18 this asserted "town → main → a hotfix note, no move" (Hotfixed at a tag). The town has no release tag
 // (SHIPPING § 1: its main is live on merge), so a town hotfix is Hotfixed at the merge (STAR-203, Truey's finding 1).
-test('B: merged, closes, town → main → live on merge: Hotfixed (the town has no tag)', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark', base: 'main' }, issue('In Review')).move, 'Hotfixed'));
+test('B: merged, closes, town → main → live on merge: town code is Hotfixed (the town has no tag)', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark', base: 'main', files: ['tools/x.mjs'] }, issue('In Review')).move, 'Hotfixed'));
 test('B: merged, closes, blueprints or telemetry → main → Shipped (live on merge)', () => {
   for (const repo of ['postmark-town/postmark-blueprints', 'postmark-town/postmark-telemetry']) assert.equal(run('closed', { merged: true, repo, base: 'main' }, issue('In Review')).move, 'Shipped');
 });
@@ -315,10 +315,44 @@ test('STAR-203: the POS-1081 shape: hotfix merged to main, then its train copy m
 const TOWN = 'postmark-town/postmark';
 test('STAR-203: a town hotfix (a closes PR into main from a non-train branch) is Hotfixed at the merge, with the live-on-merge note', () => {
   for (const state of ['Building', 'In Review']) {
-    const r = run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/pos-1010-hand-self-burn', body: 'closes WLD-51' }, issue(state));
+    const r = run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/pos-1010-hand-self-burn', body: 'closes WLD-51', files: ['tools/hand-self-burn.mjs', 'test/hand-self-burn.test.mjs'] }, issue(state));
     assert.equal(r.move, 'Hotfixed', state);
     assert.match(r.note, /live on merge \(the town has no release tag\)/, state);
   }
+});
+// RULED (lead, 2026-11-18): in the town a merge into main is live on merge, so the state follows what merged: code
+// (anything under tools/, or any .mjs/.js file; SHIPPING § 1 town row) is Hotfixed; docs only is Shipped, with a note.
+// Real shapes: town #4681 (closes POS-1019, HEARTH-SETUP.md only) is Shipped; a tools/ change is Hotfixed.
+test('STAR-203: a docs-only town PR into main (the #4681 shape: HEARTH-SETUP.md) is Shipped at the merge, with the docs note', () => {
+  for (const state of ['Building', 'In Review']) {
+    const r = run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'wld-51-hearth-setup', body: 'closes WLD-51', files: ['HEARTH-SETUP.md'] }, issue(state));
+    assert.equal(r.move, 'Shipped', state);
+    assert.match(r.note, /live on merge \(docs; TRACKING: a live-on-merge docs PR is Shipped\)/, state);
+  }
+});
+test('STAR-203: a town PR with any code path is Hotfixed, however many docs it also touches', () => {
+  for (const files of [['tools/x.mjs'], ['tools/readme-gen.sh'], ['lib/y.js'], ['HEARTH-SETUP.md', 'tools/x.mjs'], ['docs/a.md', 'src/z.mjs']]) {
+    assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'wld-51-x', body: 'closes WLD-51', files }, issue('In Review')).move, 'Hotfixed', files.join(','));
+  }
+  for (const files of [['HEARTH-SETUP.md'], ['docs/a.md', 'letters/b.json'], ['mytools/x.md']]) {
+    assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'wld-51-x', body: 'closes WLD-51', files }, issue('In Review')).move, 'Shipped', files.join(','));
+  }
+});
+test('STAR-203 control: town files that could not be read (or an empty list) are a note for a hand, never a guess', () => {
+  for (const files of [null, []]) {
+    const r = run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'wld-51-x', body: 'closes WLD-51', files }, issue('In Review'));
+    assert.equal(r.move, null); assert.match(r.note, /could not be read/);
+  }
+});
+// Truey on af233a8 (the missing test): the notes the handler wrote for a town main merge before this PR read
+// "postmark#N merged to main as a hotfix and closes X; ...". They must not hold a town train copy: no tag will come.
+test('STAR-203: an old-format town hotfix note ("postmark#N ... closes X;") does not hold a town train copy', () => {
+  const oldTownNote = 'postmark#4661 merged to main as a hotfix and closes WLD-51; Hotfixed is set at its tag by whoever cuts it (SHIPPING § 5). The state holds.';
+  const r = run('closed', { merged: true, repo: TOWN, base: 'train/2026-w47' }, withNotes('In Review', [oldTownNote]));
+  assert.equal(r.move, 'On the Train');
+  // control: the same words under an office name do hold an office train copy (the guard is the repo, not the text)
+  const office = run('closed', { merged: true, base: 'train/2026-w47' }, withNotes('In Review', [oldTownNote.replace('postmark#', 'postmark-office#')]));
+  assert.equal(office.move, null);
 });
 test('STAR-203: then a town train copy meets an already-Hotfixed issue and leaves it', () => {
   const r = run('closed', { merged: true, repo: TOWN, base: 'train/2026-w47' }, issue('Hotfixed'));
@@ -330,10 +364,12 @@ test('STAR-203: a town train copy with no hotfix first is not held (no tag will 
   assert.equal(run('closed', { merged: true, repo: TOWN, base: 'train/2026-w47' }, issue('In Review')).move, 'On the Train');
 });
 test('STAR-203 control: a town PR into main from a train branch is not a hotfix, and a town hotfix on a done-type or red-zone issue moves nothing', () => {
-  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'train/2026-w47', body: 'closes WLD-51' }, issue('In Review')).move, null);
-  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51' }, issue('Hotfixed')).move, null);
-  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51' }, issue('Gated')).move, null);
-  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51' }, issue('Backlog')).move, null);
+  const f = ['tools/x.mjs'];
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'train/2026-w47', body: 'closes WLD-51', files: f }, issue('In Review')).move, null);
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51', files: f }, issue('Hotfixed')).move, null);
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51', files: f }, issue('Gated')).move, null);
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51', files: f }, issue('Backlog')).move, null);
+  assert.equal(run('closed', { merged: true, repo: TOWN, base: 'main', headRef: 'hotfix/x', body: 'closes WLD-51', files: ['HEARTH-SETUP.md'] }, issue('Shipped')).move, null);
 });
 // Truey finding 3: the hold reads this repo's own hotfix note only
 test("STAR-203: a site hotfix's note does not hold an office train PR for the same issue (the note starts with its own repo and PR)", () => {

@@ -131,6 +131,25 @@ test('STAR-203: a takes-main PR (branch or title) passes with no Linear client m
   }
 });
 
+// ── STAR-203: the town's merge into main is live on merge; the handler reads the PR's files ──
+test('STAR-203: a docs-only town PR into main reads its files and is Shipped; a tools/ one is Hotfixed; the train\'s own is never read', async () => {
+  const town = { repo: 'postmark-town/postmark', base: 'main', merged: true, head: 'wld-51-hearth' };
+  const docs = stubLinear({ 'WLD-51': { state: 'In Review' } });
+  let asked = null;
+  await handleWith(event('closed', town), { linear: docs, files: async (repo, n) => { asked = `${repo}#${n}`; return ['HEARTH-SETUP.md']; } });
+  assert.equal(asked, 'postmark-town/postmark#51');
+  assert.deepEqual(docs.calls.map((c) => c.slice(0, 3)).filter((c) => c[0] === 'state'), [['state', 'id-WLD-51', 's-Shipped']]);
+  const code = stubLinear({ 'WLD-51': { state: 'In Review' } });
+  await handleWith(event('closed', town), { linear: code, files: async () => ['tools/mint.mjs'] });
+  assert.deepEqual(code.calls.filter((c) => c[0] === 'state'), [['state', 'id-WLD-51', 's-Hotfixed']]);
+  let reads = 0;
+  await handleWith(event('closed', { ...town, head: 'train/2026-w47' }), { linear: stubLinear({ 'WLD-51': { state: 'In Review' } }), files: async () => { reads += 1; return []; } });
+  assert.equal(reads, 0);
+  const none = stubLinear({ 'WLD-51': { state: 'In Review' } });
+  await handleWith(event('closed', town), { linear: none, files: async () => { throw new Error('403'); } });
+  assert.deepEqual(none.calls.filter((c) => c[0] === 'state'), []);
+});
+
 // ── STAR-203: Hotfixed at the tag, on a fixture commit range through a fake GitHub ──
 const REPO = 'postmark-town/postmark-office';
 const apiPr = (n, o = {}) => ({ number: n, draft: false, merged: o.merged ?? true, title: o.title ?? `PR ${n}`, body: o.body ?? 'closes WLD-51',

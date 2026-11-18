@@ -126,6 +126,9 @@ const hotfixOnMain = (issue, key, repo) => hasReleaseTags(repo)
   && (issue.handlerNotes ?? []).some((n) => new RegExp(`^${repoName(repo).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#\\d+ merged to (?:main|master) as a hotfix and closes ${key};`).test(n));
 // The town has no release tag: its main is live on merge (SHIPPING § 1), so a town hotfix is Hotfixed at the merge.
 const isTown = (repo) => repoName(repo) === 'postmark';
+/** Town code (SHIPPING § 1 town row: tools/, the ferry, the mint, the witness, the law files): anything under `tools/` or any
+ *  .mjs/.js file. A PR touching none of these is docs. */
+export const townCodePath = (f) => /^tools\//.test(String(f)) || /\.(?:mjs|js)$/.test(String(f));
 const isMainBase = (base) => base === 'main' || base === 'master';
 
 export function decide({ event, pr, issue }) {
@@ -207,8 +210,16 @@ export function decide({ event, pr, issue }) {
     return { move: null, ladder: null, check, note: `${label(pr)} merged and closes ${key}, but ${key} is in ${issue.state}, not Building or In Review, so the merge moved nothing; set it by hand.` };
   }
   // the town's hotfix (a `closes` PR into main from a branch that isn't the train) is live on merge: Hotfixed now (STAR-203)
+  // and the state follows what merged (ruled 2026-11-18): code is Hotfixed, a docs-only PR is Shipped (TRACKING: a
+  // live-on-merge docs PR is Shipped); files the handler couldn't read are a hand's
   if (isTown(pr.repo) && isMainBase(pr.base) && !/^train\//.test(String(pr.headRef))) {
-    return { move: forward(issue.state, 'Hotfixed') ? 'Hotfixed' : null, note: `${label(pr)} merged to ${pr.base} as a hotfix and closes ${key}: live on merge (the town has no release tag), so ${key} is Hotfixed.`, ladder: null, check };
+    if (!Array.isArray(pr.files) || !pr.files.length) {
+      return { move: null, ladder: null, check, note: `${label(pr)} merged to ${pr.base} and closes ${key}, but its changed files could not be read, so whether it is town code (Hotfixed) or docs (Shipped) is unknown; set the state by hand.` };
+    }
+    if (pr.files.some(townCodePath)) {
+      return { move: forward(issue.state, 'Hotfixed') ? 'Hotfixed' : null, note: `${label(pr)} merged to ${pr.base} as a hotfix and closes ${key}: live on merge (the town has no release tag), so ${key} is Hotfixed.`, ladder: null, check };
+    }
+    return { move: forward(issue.state, 'Shipped') ? 'Shipped' : null, note: `${label(pr)} merged to ${pr.base} and closes ${key}: live on merge (docs; TRACKING: a live-on-merge docs PR is Shipped), so ${key} is Shipped.`, ladder: null, check };
   }
   const r = routeOf(pr.repo, pr.base, pr.files ?? null);
   // a train copy of a hotfix that is already on main (STAR-203 rule 2): the issue waits for its tag, it doesn't ride the train

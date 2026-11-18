@@ -31,7 +31,9 @@ export function prOf(ev) {
 
 /** Whether a merge needs its changed files read: a site PR into main, by our author, merged by one of ours. */
 const needsFiles = (event, pr) => event === 'closed' && pr.merged && rungOf(pr.author) && rungOf(pr.mergedBy)
-  && /(^|\/)postmark-site$/.test(pr.repo) && (pr.base === 'main' || pr.base === 'master');
+  && (pr.base === 'main' || pr.base === 'master')
+  // a site PR into main, or a town PR into main that isn't the train's (the town's state follows what merged, STAR-203)
+  && (/(^|\/)postmark-site$/.test(pr.repo) || (/(^|\/)postmark$/.test(pr.repo) && !/^train\//.test(String(pr.headRef))));
 
 /**
  * One event, end to end. deps.linear is a Linear client, or a function that makes one: it is made only when an

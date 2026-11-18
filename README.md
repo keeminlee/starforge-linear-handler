@@ -67,7 +67,9 @@ which is the PR author's to fix and never an alarm.
   Hotfixed until it's done); the previous tag is chosen by name, not by ancestry; a rebase merge carries no `#N` and is
   missed; a revert in the range still names the reverted PR.
 - **The town has no release tag** (its `main` is live on merge, SHIPPING § 1): a `closes X` PR into the town's `main`
-  from a branch that isn't `train/*` sets X to Hotfixed at the merge, with the note "live on merge".
+  from a branch that isn't `train/*` is live on merge, and the state follows what merged (the handler reads the PR's
+  files): **town code** (anything under `tools/`, or any `.mjs`/`.js` file) sets X to Hotfixed; **docs only** sets it to
+  Shipped (TRACKING: a live-on-merge docs PR is Shipped); files that can't be read are a note for a hand.
 - **A train copy of a hotfix doesn't ride the train** (office and site). A `closes X` merge into `train/*` while this
   repo's own hotfix note for X is on the issue (a `closes X` PR already merged into `main`) moves nothing: X waits for
   its tag. A town train copy meets an already-Hotfixed issue and leaves it.
