@@ -123,7 +123,7 @@ test('#6: a files read that fails is a note, never a guess', async () => {
 });
 // ── STAR-203: a takes-main PR never reads Linear ──
 test('STAR-203: a takes-main PR (branch or title) passes with no Linear client made', async () => {
-  for (const o of [{ head: 'take-main/2026-w47', body: '' }, { head: 'x', body: '', title: 'train/2026-w47 takes main at 9be687d1f' }]) {
+  for (const o of [{ head: 'take-main/2026-w47', body: '' }, { head: 'take-main/2026-w47', body: 'closes WLD-51' }, { head: 'x', body: 'closes WLD-51', title: 'train/2026-w47 takes main at 9be687d1f' }]) {
     let made = 0;
     const ev = event('opened', o); ev.pull_request.title = o.title ?? 'x';
     const r = await handleWith(ev, { linear: async () => { made += 1; return null; } });
