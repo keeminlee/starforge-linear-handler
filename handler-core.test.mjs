@@ -102,6 +102,27 @@ test('B: ready, not finishing, never backwards and never to In Review', () => {
   for (const s of ['In Review', 'On the Train', 'Shipped']) assert.equal(run('ready_for_review', { body: 'part 1 of 3 · WLD-51' }, issue(s)).move, null, s);
 });
 test('B: ready and finishing, from Queued → In Review (unchanged)', () => assert.equal(run('opened', { body: 'closes WLD-51' }, issue('Queued')).move, 'In Review'));
+// STAR-239 (b): a ready correction PR on an issue already merged-not-live moves nothing and says "set it by hand", once
+test('B: ready and finishing, issue On the Train or Awaiting Settlement → no move, a set-it-by-hand note (STAR-239)', () => {
+  for (const s of ['On the Train', 'Awaiting Settlement']) {
+    // `closes` only: a ready `part N of M` already fails its check (STAR-203), so it is no correction piece's shape
+    for (const [ev, body] of [['opened', 'closes WLD-51'], ['ready_for_review', 'closes WLD-51']]) {
+      const r = run(ev, { body }, issue(s));
+      assert.equal(r.move, null, `${s} ${ev}`);
+      assert.match(r.note, /correction piece/, `${s} ${ev}`);
+      assert.match(r.note, /set it by hand: linear-plan move WLD-51 "In Review"/, `${s} ${ev}`);
+      assert.equal(r.check.ok, true, `${s} ${ev}`);
+    }
+  }
+});
+test('B: the correction note reads the same on opened and on marked ready (one note per fact, STAR-239)', () => {
+  assert.equal(run('opened', { body: 'closes WLD-51' }, issue('On the Train')).note, run('ready_for_review', { body: 'closes WLD-51' }, issue('On the Train')).note);
+});
+test('B: no correction note where (b) does not reach: a draft, a non-finishing piece, a done state (STAR-239)', () => {
+  assert.equal(run('opened', { draft: true, body: 'closes WLD-51' }, issue('On the Train')).note, null);
+  assert.equal(run('ready_for_review', { body: 'part 1 of 3 · WLD-51' }, issue('On the Train')).note, null);
+  for (const s of ['Shipped', 'Hotfixed', 'Done']) assert.equal(run('ready_for_review', { body: 'closes WLD-51' }, issue(s)).note, null, s);
+});
 test('B: opened ready, unsure → no move (the world#266 case: WLD-25 stayed Building)', () => {
   const r = decide({ event: 'opened', pr: pr({ repo: 'postmark-town/postmark-world', number: 266, base: 'main', author: 'wright-starforge', headRef: 'wld-25-named-creature', body: 'unsure · WLD-25' }), issue: issue('Building', 'WLD-25') });
   assert.equal(r.move, null);
