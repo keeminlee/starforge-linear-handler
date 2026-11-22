@@ -111,6 +111,8 @@ const LANE_STATES = new Set(['Building', 'In Review']);
 // done-type states (TRACKING § The states: Shipped is a kind of Done, Hotfixed is Done by hotfix): the handler never
 // moves an issue out of one (STAR-203)
 export const DONE_STATES = new Set(['Hotfixed', 'Shipped', 'Done']);
+// merged but not yet live (TRACKING § The states): a ready PR that finishes an issue here is a correction piece (STAR-239)
+export const AHEAD_OF_REVIEW = new Set(['On the Train', 'Awaiting Settlement']);
 
 /** The takes-main PR carries no issue by design (STAR-203, ruled 2026-11-18): its head branch starts `take-main/`, or its
  *  title is `train/<week> takes main at <sha>`. The check passes it and the handler moves nothing for it. */
@@ -188,6 +190,13 @@ export function decide({ event, pr, issue }) {
     // done line leaves the state where it is: an umbrella issue's other lanes are still building (world#266 opened
     // `unsure · WLD-25` and moved WLD-25 to In Review with four lanes on it).
     const finishes = !d.error && (d.kind === 'closes' || (d.kind === 'part' && d.n === d.m));
+    // A CORRECTION PIECE (STAR-239, Wright 2026-11-22 21:53Z: "take (b) first"): a ready PR that finishes an issue already
+    // On the Train or Awaiting Settlement is an open piece behind a merged one, so TRACKING's behindmost piece puts the issue
+    // back In Review. The handler never moves it back on its own; it says so, once (the words don't depend on the event).
+    // POS-904 / office#1194 sat On the Train in silence before this.
+    if (finishes && AHEAD_OF_REVIEW.has(issue.state)) {
+      return { move: null, ladder: null, check, note: `${label(pr)} is ready and closes ${key}, but ${key} is already ${issue.state}: this PR is a correction piece behind a merged one, and TRACKING's behindmost piece puts ${key} back In Review. The handler never moves an issue back, so set it by hand: linear-plan move ${key} "In Review".` };
+    }
     if (finishes) return { move: forward(issue.state, 'In Review') ? 'In Review' : null, note: null, ladder: null, check };
     // A ready PR that doesn't finish its issue still means a lane has started, so from Queued it takes the issue to
     // Building, as a draft would. world#295 opened ready as part 1 of 3 and left WLD-97 in Queued, where no seat may move
