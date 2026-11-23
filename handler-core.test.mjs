@@ -142,9 +142,18 @@ test('B: a draft without a done line passes (it is needed when ready)', () => as
 test('B: merged, closes, office → train → On the Train', () => assert.equal(run('closed', { merged: true }, issue('In Review')).move, 'On the Train'));
 test('B: merged, closes, site → train → On the Train', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-site' }, issue('In Review')).move, 'On the Train'));
 test('B: merged, closes, world → main → Awaiting Settlement', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-world', base: 'main' }, issue('In Review')).move, 'Awaiting Settlement'));
-test('B: merged, closes, office → main → a hotfix: no move; Hotfixed is set at its tag (Wright\'s ruling)', () => {
-  const r = run('closed', { merged: true, base: 'main' }, issue('In Review'));
-  assert.equal(r.move, null); assert.match(r.note, /as a hotfix .* Hotfixed is set at its tag/);
+// Until 2026-11-23 this asserted "no move; Hotfixed is set at its tag" (Wright's 10-14 hold). TRACKING's Awaiting Settlement
+// row is law (Wright, 2026-11-23 08:39 EST, on Rivet's POS-1189 FAULT): a hotfix merged to main is Awaiting Settlement until its tag.
+test('B: merged, closes, office → main → a hotfix: Awaiting Settlement now, Hotfixed at its tag (TRACKING)', () => {
+  for (const s of ['Building', 'In Review']) {
+    const r = run('closed', { merged: true, base: 'main', headRef: 'hotfix/pos-1189-x' }, issue(s));
+    assert.equal(r.move, 'Awaiting Settlement', s);
+    assert.match(r.note, /as a hotfix and closes WLD-51; it goes live at its hand tag, so WLD-51 is Awaiting Settlement until then and Hotfixed at the tag/, s);
+  }
+});
+test('B: an office train into main (the ship) is not a hotfix: no move, and no hotfix note to hold a train copy', () => {
+  const r = run('closed', { merged: true, base: 'main', headRef: 'train/2026-w49' }, issue('In Review'));
+  assert.equal(r.move, null); assert.doesNotMatch(r.note, /as a hotfix/); assert.match(r.note, /is the ship, not a hotfix/);
 });
 test('B: merged, closes, town → train → On the Train', () => assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark' }, issue('In Review')).move, 'On the Train'));
 // until 2026-11-18 this asserted "town → main → a hotfix note, no move" (Hotfixed at a tag). The town has no release tag
@@ -223,9 +232,9 @@ test('#4: a state the handler does not know is never moved out of (a curly apost
 test('#6: a site PR into main touching only live-on-merge paths is Shipped at merge', () => {
   assert.equal(run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main', files: ['tools/fetch-town.mjs', 'src/data/postmark/x.json'] }, issue('In Review')).move, 'Shipped');
 });
-test('#6: a site PR into main touching code is a hotfix: a note, no move', () => {
+test('#6: a site PR into main touching code is a hotfix: Awaiting Settlement, with the hotfix note', () => {
   const r = run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main', files: ['tools/a.mjs', 'src/lib/b.ts'] }, issue('In Review'));
-  assert.equal(r.move, null); assert.match(r.note, /as a hotfix/);
+  assert.equal(r.move, 'Awaiting Settlement'); assert.match(r.note, /as a hotfix/);
 });
 test('#6: a site PR into main whose files could not be read: a note, no move', () => {
   const r = run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main', files: null }, issue('In Review'));
@@ -241,7 +250,7 @@ test('#1: a rename counts under both names: code moved into tools/ is not live-o
   const files = pathsOf([{ filename: 'tools/Card.astro', previous_filename: 'src/components/Card.astro', status: 'renamed' }]);
   assert.deepEqual(files, ['tools/Card.astro', 'src/components/Card.astro']);
   const r = run('closed', { merged: true, repo: 'postmark-town/postmark-site', base: 'main', files }, issue('In Review'));
-  assert.equal(r.move, null); assert.match(r.note, /as a hotfix/);
+  assert.equal(r.move, 'Awaiting Settlement'); assert.match(r.note, /as a hotfix/);
 });
 test('#3: a part merge moves Queued or In Review to Building, never Backlog or Ready', () => {
   for (const [s, to] of [['Queued', 'Building'], ['In Review', 'Building'], ['Building', null], ['Backlog', null], ['Ready', null]]) {
@@ -308,6 +317,11 @@ test('STAR-203: the POS-1081 shape: hotfix merged to main, then its train copy m
     assert.equal(r.move, null, repo);
     assert.match(r.note, /a train copy of a hotfix that's on main; Hotfixed comes at the tag/, repo);
     assert.match(r.note, /stays in In Review/, repo);
+    // and where the hotfix's merge has already moved it (2026-11-23): the train copy holds it there with the same note,
+    // not "not Building or In Review … set it by hand"
+    const r2 = run('closed', { merged: true, repo, number: 1123, base: 'train/2026-w47' }, withNotes('Awaiting Settlement', [hot]));
+    assert.equal(r2.move, null, repo);
+    assert.match(r2.note, /a train copy of a hotfix that's on main; Hotfixed comes at the tag\. WLD-51 stays in Awaiting Settlement/, repo);
   }
 });
 // Truey on 2262779 (blocking): the town has no release tag (its main is live on merge, SHIPPING § 1), so rule 4's hold and

@@ -53,8 +53,11 @@ export function branchKey(ref) {
 
 // The ship routes (Wright 10-14 18:24 and his review ruling, from TRACKING and SHIPPING § 4–5): office, site and town
 // ride the weekly train; world ships at a blessed settlement; the docs and ops repos are live on merge. A merge into
-// an office, site or town main is a hotfix: Hotfixed is set at its tag by whoever cuts it, never at merge, so the state
-// holds with a note. A site PR into main touching only the live-on-merge paths is live on merge: Shipped.
+// an office or site main is a hotfix: merged and waiting to go live at its hand tag, so the issue moves to Awaiting
+// Settlement now and Hotfixed at the tag (TRACKING § The states, the Awaiting Settlement row: "An office or site hotfix
+// merged to main lands here too; it goes live at its hand tag, so move it to Hotfixed then"; Wright ruled it law over the
+// 10-14 hold, 2026-11-23 08:39 EST, on Rivet's POS-1189 FAULT). The town's main is live on merge (below). A site PR
+// into main touching only the live-on-merge paths is live on merge: Shipped.
 // world-spire (a private fork) has no route: a hand sets it.
 const TRAIN_REPOS = new Set(['postmark-office', 'postmark-site', 'postmark']);
 const LIVE_ON_MERGE = new Set(['postmark-blueprints', 'postmark-telemetry']);
@@ -118,7 +121,7 @@ export const takesMain = (pr) => /^take-main\//i.test(String(pr.headRef ?? '')) 
 
 // The handler's own note for a merge into main that is a hotfix (office, site, town). It is also how a later train copy
 // of the same issue knows a hotfix is already on main (STAR-203 rule 2), so the words live in one place.
-const hotfixNote = (pr, key) => `${label(pr)} merged to ${pr.base} as a hotfix and closes ${key}; Hotfixed is set at its tag, by the handler (SHIPPING § 5). The state holds.`;
+const hotfixNote = (pr, key) => `${label(pr)} merged to ${pr.base} as a hotfix and closes ${key}; it goes live at its hand tag, so ${key} is Awaiting Settlement until then and Hotfixed at the tag, by the handler (TRACKING § The states; SHIPPING § 5).`;
 // Only for the repos with release tags (office, site), and only this repo's own note: a site hotfix note must not hold an
 // office train PR (Truey, STAR-203). The note starts with `label(pr)`, so the match is anchored on `<repo>#<n>`.
 const repoName = (repo) => String(repo).replace(/^postmark-town\//, '');
@@ -210,6 +213,12 @@ export function decide({ event, pr, issue }) {
     // a done state is never moved back (STAR-203): a hotfix's train copy merging after its tag lands here, and there is nothing to set by hand
     return { move: null, ladder: null, check, note: `${label(pr)} merged into ${pr.base} and closes ${key}, but ${key} is already ${issue.state}; the handler never moves a done state back, so it stays (a train copy of a hotfix lands here).` };
   }
+  // a train copy of a hotfix that is already on main (STAR-203 rule 2): the issue waits for its tag, it doesn't ride the
+  // train. Asked before the lane states, because the hotfix's merge has already moved the issue to Awaiting Settlement.
+  const r = routeOf(pr.repo, pr.base, pr.files ?? null);
+  if (r.to === 'On the Train' && hotfixOnMain(issue, key, pr.repo)) {
+    return { move: null, ladder: null, check, note: `${label(pr)} merged into ${pr.base} and closes ${key}: a train copy of a hotfix that's on main; Hotfixed comes at the tag. ${key} stays in ${issue.state}.` };
+  }
   if (!LANE_STATES.has(issue.state)) {
     return { move: null, ladder: null, check, note: `${label(pr)} merged and closes ${key}, but ${key} is in ${issue.state}, not Building or In Review, so the merge moved nothing; set it by hand.` };
   }
@@ -225,14 +234,16 @@ export function decide({ event, pr, issue }) {
     }
     return { move: forward(issue.state, 'Shipped') ? 'Shipped' : null, note: `${label(pr)} merged to ${pr.base} and closes ${key}: live on merge (docs; TRACKING: a live-on-merge docs PR is Shipped), so ${key} is Shipped.`, ladder: null, check };
   }
-  const r = routeOf(pr.repo, pr.base, pr.files ?? null);
-  // a train copy of a hotfix that is already on main (STAR-203 rule 2): the issue waits for its tag, it doesn't ride the train
-  if (r.to === 'On the Train' && hotfixOnMain(issue, key, pr.repo)) {
-    return { move: null, ladder: null, check, note: `${label(pr)} merged into ${pr.base} and closes ${key}: a train copy of a hotfix that's on main; Hotfixed comes at the tag. ${key} stays in ${issue.state}.` };
-  }
   if (r.to) return { move: forward(issue.state, r.to) ? r.to : null, note: null, ladder: null, check };
+  // an office or site hotfix (a branch that isn't the train, into main): Awaiting Settlement now, with the note a later
+  // train copy is held by (hotfixOnMain). TRACKING's row names office and site only; a train into main is the ship.
+  if (r.why === 'hotfix' && hasReleaseTags(pr.repo) && !/^train\//.test(String(pr.headRef ?? ''))) {
+    return { move: forward(issue.state, 'Awaiting Settlement') ? 'Awaiting Settlement' : null, ladder: null, check, note: hotfixNote(pr, key) };
+  }
+  if (r.why === 'hotfix') {
+    return { move: null, ladder: null, check, note: `${label(pr)} merged to ${pr.base} from ${pr.headRef ?? 'a branch'} and closes ${key}: a train into main is the ship, not a hotfix, so the merge moves nothing; set it by hand if it needs a move.` };
+  }
   const why = {
-    hotfix: hotfixNote(pr, key),
     'files-unread': `${label(pr)} merged to ${pr.base} and closes ${key}, but its changed files could not be read, so whether it is live on merge is unknown; set the state by hand.`,
     unrouted: `${label(pr)} merged into ${pr.base} and closes ${key}, but no route is ruled for that repo and base; set the state by hand.`,
   }[r.why];
