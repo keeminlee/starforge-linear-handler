@@ -45,8 +45,10 @@ which is the PR author's to fix and never an alarm.
 - `closes` moves an issue only from Building or In Review.
 - Our author opened the PR and one of ours merged it.
 - A state the handler doesn't know is never moved out of.
-- A merge into office, site or town `main` is a hotfix: a note, and Hotfixed is set at its tag by hand. The exception
-  is a site PR that touches only the live-on-merge paths (SHIPPING § 4), which is Shipped at merge.
+- A merge into office or site `main` from a branch that isn't the train is a hotfix: the issue moves to Awaiting
+  Settlement, with a note, and to Hotfixed at its tag (TRACKING § The states; Wright, 2026-11-23). The exception is a
+  site PR that touches only the live-on-merge paths (SHIPPING § 4), which is Shipped at merge. A town hotfix is
+  Hotfixed at the merge (the town has no release tag). A train into main is the ship: a note, no move.
 
 ## Known behaviours
 - **A merge through GitHub's merge queue** is merged by `github-merge-queue[bot]`, which is not one of ours, so Linear
