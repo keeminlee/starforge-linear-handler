@@ -10,7 +10,8 @@
 //             the caller delegates the issue to it, and the house's doorbell rings the new holder (rule 6)
 //     check   { ok, summary } for the PR's own check run: a ready PR without a done line fails it
 
-export const TEAMS = ['POS', 'WLD', 'CORE', 'CON'];
+// UI: Interfaces, Facet's team (Darko's split, 2026-11-25)
+export const TEAMS = ['POS', 'WLD', 'CORE', 'CON', 'UI'];
 export const RED_ZONE = new Set(['Gated', 'Needs a Sitting', "Darko's Call"]);
 const RANK = { Backlog: 0, Ready: 1, Queued: 1, Building: 2, 'In Review': 3, 'On the Train': 4, 'Awaiting Settlement': 4, Hotfixed: 5, Shipped: 5, Done: 5, Canceled: 5, Duplicate: 5 };
 

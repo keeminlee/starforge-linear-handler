@@ -27,6 +27,15 @@ test('done line: CORE and CON are our teams (STAR-141)', () => {
   assert.deepEqual(doneLine('closes CORE-25'), { kind: 'closes', key: 'CORE-25' });
   assert.deepEqual(doneLine('closes CON-6'), { kind: 'closes', key: 'CON-6' });
 });
+// Darko's 2026-11-25 split: UI ("Interfaces", Facet's team) is ours too; without it "closes UI-7" read as no done line.
+test('done line: UI is our team (Darko, 2026-11-25)', () => {
+  assert.deepEqual(doneLine('closes UI-7'), { kind: 'closes', key: 'UI-7' });
+  assert.deepEqual(doneLine('part 1 of 2 · UI-7'), { kind: 'part', n: 1, m: 2, key: 'UI-7' });
+  assert.deepEqual(doneLine('unsure · UI-7'), { kind: 'unsure', key: 'UI-7' });
+  assert.equal(branchKey('ui-7-nav-bar'), 'UI-7');
+  const r = run('closed', { merged: true, headRef: 'ui-7-nav-bar', body: 'closes UI-7' }, issue('In Review', 'UI-7'));
+  assert.equal(r.move, 'On the Train'); // a merged "closes UI-7" moves the issue, as it does for WLD-51
+});
 test('branch key (house rule 7)', () => {
   assert.equal(branchKey('wld-9-own-home-in-bare-read'), 'WLD-9');
   assert.equal(branchKey('pos-516'), 'POS-516');
